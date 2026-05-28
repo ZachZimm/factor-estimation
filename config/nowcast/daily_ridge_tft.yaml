@@ -1,0 +1,13 @@
+task:
+  mode: "nowcast"
+  estimate_unreleased_only: false
+
+nowcast:
+  run_name: "daily_nowcast_ridge_tft_v1"
+  models:
+    - "rolling_mean"
+    - "ewma"
+    - "ridge"
+    - "tft"
+  primary_model: "ridge"
+

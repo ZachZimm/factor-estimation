@@ -1,0 +1,16 @@
+.venv/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+data/cache/
+data/raw/
+data/processed/
+data/predictions/
+data/models/
+data/experiments/
+data/nowcasts/
+
+F-F_Research_Data_5_Factors_2x3_daily_CSV.zip
+F-F_Research_Data_5_Factors_2x3_daily_CSV/

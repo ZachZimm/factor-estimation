@@ -1,0 +1,208 @@
+data:
+  start_date: "2000-01-01"
+  end_date: null
+  ff5_frequency: "daily"
+  tickers:
+    - "SPY"
+    - "VTI"
+    - "IWM"
+    - "QQQ"
+    - "IVE"
+    - "IVW"
+    - "VBR"
+    - "VBK"
+    - "IJS"
+    - "IJT"
+    - "XLF"
+    - "XLK"
+    - "XLI"
+    - "XLY"
+    - "XLP"
+    - "XLV"
+    - "XLE"
+    - "XLU"
+    - "TLT"
+    - "IEF"
+    - "SHY"
+    - "HYG"
+    - "LQD"
+    - "GLD"
+    - "UUP"
+    - "^VIX"
+  cache_dir: "data/cache"
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  force_refresh: false
+
+features:
+  lookback_windows: [1, 2, 5, 10, 21, 63, 126]
+  include_returns: true
+  include_log_returns: true
+  include_rolling_volatility: true
+  include_rolling_volume_features: false
+  include_ohlc_features: true
+  include_drawdown: true
+  drop_raw_ohlcv: true
+
+target_features:
+  include_lagged_targets: true
+  lags: [1, 2, 5, 10, 21]
+  rolling_windows: [5, 21, 63]
+  include_rolling_mean: true
+  include_rolling_volatility: true
+  include_rolling_min_max: false
+  include_rf_lags: true
+
+training:
+  train_window_days: 1260
+  min_train_rows: 1000
+  step_size: 1
+  model_type: "ridge"
+  scale_features: true
+  refit_each_step: true
+  save_models: false
+
+prediction:
+  horizon: 1
+  target_mode: "daily"
+  cumulative_horizon_rows: 1
+  target_columns:
+    - "Mkt-RF"
+    - "SMB"
+    - "HML"
+    - "RMW"
+    - "CMA"
+  include_rf_as_feature: false
+  predict_rf: false
+
+availability:
+  market_data_lag_rows: 0
+  official_factor_lag_rows: 1
+  recursive_factor_lags: true
+  release_gap_backtest_days: [1, 2, 3, 5, 10]
+
+output:
+  predictions_path: "data/predictions/ff5_predictions.csv"
+  metrics_path: "data/predictions/metrics.json"
+  models_dir: "data/models"
+  force_overwrite: false
+
+nowcast:
+  output_dir: "data/nowcasts"
+  run_name: "daily_ff5_nowcast_v1"
+  models:
+    - "rolling_mean"
+    - "ewma"
+    - "ridge"
+    - "tft"
+  primary_model: "ridge"
+  estimate_unreleased_only: true
+  save_feature_snapshot: true
+  save_model_artifact: true
+  min_train_rows: 1000
+  train_window_rows: 2520
+  backtest_step_rows: 21
+
+experiments:
+  output_dir: "data/experiments"
+  run_name: null
+  random_seed: 42
+  models:
+    - "rolling_mean"
+    - "ewma"
+    - "elasticnet"
+    - "ridge"
+    - "tft"
+
+walk_forward:
+  checkpoint_frequency: "M"
+  train_window_rows: 1260
+  min_train_rows: 1000
+  min_fit_rows: 1000
+  validation_window_rows: 252
+  require_validation: false
+  predict_between_checkpoints: true
+  refit_on_each_checkpoint: true
+
+sequence:
+  lookback_rows: 63
+  batch_size: 256
+  num_workers: 0
+  drop_incomplete_sequences: true
+
+torch:
+  device: "auto"
+  max_epochs: 50
+  patience: 8
+  learning_rate: 0.0005
+  weight_decay: 0.001
+  gradient_clip_norm: 1.0
+  mixed_precision: false
+  hidden_size: 128
+  dropout: 0.15
+  standardize_targets: true
+  save_checkpoints: false
+  log_device: true
+  restore_best_checkpoint: true
+
+models:
+  ridge:
+    alpha: 10.0
+    alpha_grid: [0.1, 1.0, 3.0, 10.0, 30.0, 100.0]
+    tune_alpha: true
+    validation_window_rows: 252
+    scale_features: true
+
+  elasticnet:
+    alpha: 0.001
+    l1_ratio: 0.2
+    max_iter: 50000
+    tol: 0.0001
+
+  ewma:
+    spans: [5, 21, 63]
+    default_span: 21
+
+  mlp_window:
+    hidden_sizes: [512, 256, 128]
+    activation: "gelu"
+
+  tcn:
+    channels: [64, 64, 128, 128]
+    kernel_size: 3
+    dropout: 0.15
+
+  patchtst:
+    enabled: false
+    hidden: true
+    patch_len: 8
+    stride: 4
+    d_model: 64
+    n_heads: 4
+    num_layers: 2
+    dim_feedforward: 128
+    dropout: 0.25
+
+  tft:
+    enabled: true
+    hidden_size: 64
+    n_heads: 4
+    lstm_layers: 1
+    dropout: 0.25
+
+proxy_features:
+  enabled: true
+  include_relative_returns: true
+  include_factor_mimic_spreads: true
+  include_risk_proxies: true
+  rolling_windows: [5, 21, 63]
+
+fundamentals:
+  enabled: false
+
+regimes:
+  enabled: true
+  volatility_source: "SPY_vol_21d"
+  high_vol_quantile: 0.8
+  low_vol_quantile: 0.2
+  market_return_source: "SPY_ret_21d"
