@@ -14,6 +14,3 @@ echo "Running production market-only release-gap backtest..."
 
 echo "Building production diagnostic nowcast dataset..."
 "${PYTHON_BIN}" -m ff5_predictor.cli build-nowcast-dataset --config config/nowcast/diagnostic.yaml
-
-echo "Available models:"
-"${PYTHON_BIN}" -m ff5_predictor.cli list-models

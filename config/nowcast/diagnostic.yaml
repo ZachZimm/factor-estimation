@@ -1,0 +1,15 @@
+task:
+  mode: "nowcast"
+  estimate_unreleased_only: true
+
+nowcast:
+  run_name: "production_market_only_diagnostic_v1"
+  models:
+    - "ridge"
+  primary_model: "ridge"
+  estimate_unreleased_only: true
+  save_feature_snapshot: true
+  save_model_artifact: false
+  save_feature_attributions: false
+  min_train_rows: 1000
+  train_window_rows: 2520

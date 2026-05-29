@@ -4,15 +4,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import pandas as pd
 
-from ff5_predictor.availability import unreleased_market_dates
+from ff5_predictor.attribution import explain_ridge_predictions
 from ff5_predictor.data_famafrench import load_ff5
 from ff5_predictor.data_yfinance import load_market_data
-from ff5_predictor.io import ensure_dir, normalize_datetime_index
+from ff5_predictor.io import ensure_dir
 from ff5_predictor.nowcast_dataset import build_nowcast_dataset
-from ff5_predictor.nowcast_features import build_nowcast_features
+from ff5_predictor.nowcast_engine import (
+    NowcastTargetSpec,
+    empty_production_predictions,
+    run_nowcast_engine,
+    select_production_columns,
+)
 from ff5_predictor.nowcast_io import (
     create_nowcast_run_dir,
     sync_latest_copy,
@@ -22,10 +26,6 @@ from ff5_predictor.nowcast_io import (
 )
 from ff5_predictor.nowcast_models import (
     FittedNowcastModel,
-    ewma_predict,
-    fit_ridge_nowcast,
-    fit_tft_nowcast,
-    rolling_mean_predict,
     save_fitted_model,
 )
 
@@ -54,10 +54,31 @@ def run_production_nowcast_from_frames(
     dataset = build_nowcast_dataset(ff5_df, market_df, config)
     write_json(run_dir / "metadata" / "dataset_metadata.json", dataset.metadata)
 
-    predictions = _empty_prediction_frame(dataset.target_columns)
-    feature_snapshot = pd.DataFrame()
-    if len(dataset.unreleased_dates) > 0:
-        predictions, feature_snapshot = _predict_unreleased(ff5_df, market_df, dataset, config, run_dir)
+    spec = NowcastTargetSpec(
+        target_dates=dataset.unreleased_dates,
+        cutoff_date=dataset.latest_official_date,
+        latest_market_date=dataset.latest_market_date,
+        actuals=None,
+        is_unreleased=True,
+        release_gap_size_by_date=None,
+    )
+    engine_result = run_nowcast_engine(
+        ff5_df=ff5_df,
+        market_df=market_df,
+        train_df=dataset.train_df,
+        feature_columns=dataset.feature_columns,
+        target_columns=dataset.target_columns,
+        spec=spec,
+        config=config,
+    )
+    predictions = select_production_columns(engine_result.predictions, dataset.target_columns)
+    if len(dataset.unreleased_dates) == 0:
+        predictions = empty_production_predictions(dataset.target_columns)
+    feature_snapshot = engine_result.feature_snapshots
+
+    ridge_model = engine_result.fitted_models.get("ridge")
+    if isinstance(ridge_model, FittedNowcastModel) and bool(config.get("nowcast", {}).get("save_model_artifact", True)):
+        save_primary_model_artifact(ridge_model, run_dir)
 
     write_nowcast_predictions(run_dir, "latest_nowcast.csv", predictions)
     write_json(run_dir / "predictions" / "latest_nowcast.json", {"records": predictions.to_dict(orient="records")})
@@ -65,12 +86,23 @@ def run_production_nowcast_from_frames(
         ensure_dir(run_dir / "features")
         feature_snapshot.to_parquet(run_dir / "features" / "latest_feature_snapshot.parquet")
 
+    attribution_metadata: dict[str, Any] = {"enabled": False}
+    if isinstance(ridge_model, FittedNowcastModel) and bool(config.get("nowcast", {}).get("save_feature_attributions", False)):
+        attribution_metadata = save_ridge_attributions(ridge_model, feature_snapshot, predictions, config, run_dir)
+
     metadata = {
         **dataset.metadata,
         "n_prediction_rows": int(len(predictions)),
         "models": config.get("nowcast", {}).get("models", []),
         "primary_model": config.get("nowcast", {}).get("primary_model"),
         "run_dir": str(run_dir),
+        "production_profile": "market_only_all_candidates",
+        "feature_policy": {
+            "uses_ff5_input_features": bool(config.get("target_features", {}).get("include_lagged_targets", False)),
+            "uses_recursive_factor_lags": bool(config.get("availability", {}).get("recursive_factor_lags", True)),
+            "uses_same_day_market_data": int(config.get("availability", {}).get("market_data_lag_rows", 0)) == 0,
+        },
+        "attribution": attribution_metadata,
     }
     write_json(run_dir / "metadata" / "metadata.json", metadata)
     if config.get("nowcast", {}).get("run_name") == "production_latest":
@@ -83,128 +115,36 @@ def run_production_nowcast_from_frames(
     )
 
 
-def _predict_unreleased(
-    ff5_df: pd.DataFrame,
-    market_df: pd.DataFrame,
-    dataset,
+def save_ridge_attributions(
+    fitted: FittedNowcastModel,
+    feature_snapshot: pd.DataFrame,
+    predictions: pd.DataFrame,
     config: dict[str, Any],
     run_dir: Path,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    ff5 = normalize_datetime_index(ff5_df)
-    market = normalize_datetime_index(market_df)
-    target_columns = dataset.target_columns
-    models = list(config.get("nowcast", {}).get("models", ["ridge"]))
-    recursive = bool(config.get("availability", {}).get("recursive_factor_lags", True))
-    records: list[dict[str, Any]] = []
-    snapshots: list[pd.DataFrame] = []
-
-    fitted_ridge: FittedNowcastModel | None = None
-    if "ridge" in models:
-        fitted_ridge = fit_ridge_nowcast(dataset.train_df, dataset.feature_columns, target_columns, config)
-        if bool(config.get("nowcast", {}).get("save_model_artifact", True)):
-            save_primary_model_artifact(fitted_ridge, run_dir)
-    fitted_tft = fit_tft_nowcast(dataset.train_df, dataset.feature_columns, target_columns, config) if "tft" in models else None
-
-    history_by_model = {
-        model: ff5[target_columns].loc[: dataset.latest_official_date].copy()
-        for model in models
+) -> dict[str, Any]:
+    top_n = int(config.get("attribution", {}).get("top_n", 20))
+    result = explain_ridge_predictions(fitted, feature_snapshot, predictions, top_n=top_n)
+    attribution_dir = ensure_dir(run_dir / "attribution")
+    paths = {
+        "coefficients": attribution_dir / "ridge_coefficients.csv",
+        "contributions_long": attribution_dir / "ridge_contributions_long.parquet",
+        "contributions_wide": attribution_dir / "ridge_contributions_wide.parquet",
+        "top_contributions": attribution_dir / "ridge_top_contributions.csv",
+        "group_contributions": attribution_dir / "ridge_group_contributions.csv",
+        "metadata": attribution_dir / "attribution_metadata.json",
     }
-    feature_history_by_model = {
-        model: dataset.train_df[dataset.feature_columns].copy()
-        for model in models
+    result.coefficient_table.to_csv(paths["coefficients"], index=False)
+    result.contribution_long.to_parquet(paths["contributions_long"], index=False)
+    result.contribution_wide.to_parquet(paths["contributions_wide"], index=False)
+    result.top_contributions.to_csv(paths["top_contributions"], index=False)
+    result.group_summary.to_csv(paths["group_contributions"], index=False)
+    write_json(paths["metadata"], result.metadata)
+    return {
+        "enabled": True,
+        "top_n": top_n,
+        "paths": {key: str(path) for key, path in paths.items()},
+        **result.metadata,
     }
-    recursive_predictions_by_model: dict[str, pd.DataFrame] = {model: pd.DataFrame() for model in models}
-    span = int(config.get("models", {}).get("ewma", {}).get("default_span", 21))
-    train_window = int(config.get("nowcast", {}).get("train_window_rows", 2520))
-
-    for gap_day, target_date in enumerate(dataset.unreleased_dates, start=1):
-        for model_type in models:
-            if model_type == "ridge":
-                if fitted_ridge is None:
-                    continue
-                recursive_predictions = recursive_predictions_by_model[model_type] if recursive else None
-                feature_result = build_nowcast_features(
-                    ff5,
-                    market.loc[:target_date],
-                    config,
-                    official_cutoff_date=dataset.latest_official_date,
-                    recursive_predictions=recursive_predictions,
-                )
-                row = feature_result.features.reindex([target_date])
-                missing = [col for col in dataset.feature_columns if col not in row.columns]
-                for col in missing:
-                    row[col] = np.nan
-                row = row[dataset.feature_columns]
-                if row.isna().any(axis=None):
-                    continue
-                pred_values = fitted_ridge.predict_frame(row)[0]
-                snapshot = row.copy()
-                snapshot["model_type"] = model_type
-                snapshots.append(snapshot)
-                model_metadata = fitted_ridge.metadata
-            elif model_type == "rolling_mean":
-                pred_values = rolling_mean_predict(history_by_model[model_type], target_columns, train_window).to_numpy()
-                model_metadata = {
-                    "n_train_rows": int(len(history_by_model[model_type])),
-                    "train_start_date": str(history_by_model[model_type].index.min().date()),
-                    "train_end_date": str(history_by_model[model_type].index.max().date()),
-                }
-            elif model_type == "ewma":
-                pred_values = ewma_predict(history_by_model[model_type], target_columns, span).to_numpy()
-                model_metadata = {
-                    "n_train_rows": int(len(history_by_model[model_type])),
-                    "train_start_date": str(history_by_model[model_type].index.min().date()),
-                    "train_end_date": str(history_by_model[model_type].index.max().date()),
-                    "span": span,
-                }
-            elif model_type == "tft":
-                if fitted_tft is None:
-                    continue
-                recursive_predictions = recursive_predictions_by_model[model_type] if recursive else None
-                feature_result = build_nowcast_features(
-                    ff5,
-                    market.loc[:target_date],
-                    config,
-                    official_cutoff_date=dataset.latest_official_date,
-                    recursive_predictions=recursive_predictions,
-                )
-                row = feature_result.features.reindex([target_date])
-                missing = [col for col in dataset.feature_columns if col not in row.columns]
-                for col in missing:
-                    row[col] = np.nan
-                row = row[dataset.feature_columns]
-                if row.isna().any(axis=None):
-                    continue
-                feature_history = pd.concat([feature_history_by_model[model_type], row])
-                pred_values = fitted_tft.predict_from_history(feature_history)
-                model_metadata = fitted_tft.metadata
-            else:
-                raise ValueError(f"Unsupported production nowcast model: {model_type}")
-
-            record = _prediction_record(
-                target_date=target_date,
-                pred_values=pred_values,
-                target_columns=target_columns,
-                model_type=model_type,
-                latest_official_date=dataset.latest_official_date,
-                latest_market_date=dataset.latest_market_date,
-                gap_day=gap_day,
-                model_metadata=model_metadata,
-                recursive=recursive,
-            )
-            records.append(record)
-            pred_frame = pd.DataFrame([dict(zip(target_columns, pred_values))], index=[target_date])
-            if recursive:
-                recursive_predictions_by_model[model_type] = pd.concat(
-                    [recursive_predictions_by_model[model_type], pred_frame]
-                )
-                history_by_model[model_type] = pd.concat([history_by_model[model_type], pred_frame])
-            if model_type == "tft":
-                feature_history_by_model[model_type] = pd.concat([feature_history_by_model[model_type], row])
-
-    predictions = pd.DataFrame(records, columns=_prediction_columns(target_columns))
-    feature_snapshot = pd.concat(snapshots) if snapshots else pd.DataFrame()
-    return predictions, feature_snapshot
 
 
 def save_primary_model_artifact(
@@ -213,55 +153,3 @@ def save_primary_model_artifact(
 ) -> None:
     ensure_dir(run_dir / "models")
     save_fitted_model(fitted, run_dir / "models" / f"{fitted.model_type}.joblib")
-
-
-def _prediction_record(
-    target_date: pd.Timestamp,
-    pred_values,
-    target_columns: list[str],
-    model_type: str,
-    latest_official_date: pd.Timestamp,
-    latest_market_date: pd.Timestamp,
-    gap_day: int,
-    model_metadata: dict[str, Any],
-    recursive: bool,
-) -> dict[str, Any]:
-    record: dict[str, Any] = {
-        "date": pd.Timestamp(target_date).date().isoformat(),
-        "model_type": model_type,
-        "latest_official_factor_date": pd.Timestamp(latest_official_date).date().isoformat(),
-        "latest_market_date": pd.Timestamp(latest_market_date).date().isoformat(),
-        "is_unreleased": True,
-        "gap_day": int(gap_day),
-        "train_start_date": model_metadata.get("train_start_date"),
-        "train_end_date": model_metadata.get("train_end_date"),
-        "n_train_rows": model_metadata.get("n_train_rows"),
-        "market_data_asof": pd.Timestamp(target_date).date().isoformat(),
-        "factor_data_asof": pd.Timestamp(latest_official_date).date().isoformat(),
-        "recursive_factor_lags": recursive,
-    }
-    for column, value in zip(target_columns, pred_values):
-        record[f"pred_{column}"] = float(value)
-    return record
-
-
-def _prediction_columns(target_columns: list[str]) -> list[str]:
-    return [
-        "date",
-        *[f"pred_{column}" for column in target_columns],
-        "model_type",
-        "latest_official_factor_date",
-        "latest_market_date",
-        "is_unreleased",
-        "gap_day",
-        "train_start_date",
-        "train_end_date",
-        "n_train_rows",
-        "market_data_asof",
-        "factor_data_asof",
-        "recursive_factor_lags",
-    ]
-
-
-def _empty_prediction_frame(target_columns: list[str]) -> pd.DataFrame:
-    return pd.DataFrame(columns=_prediction_columns(target_columns))

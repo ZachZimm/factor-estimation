@@ -1,0 +1,28 @@
+task:
+  mode: "nowcast"
+  estimate_unreleased_only: true
+
+nowcast:
+  run_name: "legacy_ff5_lag_production"
+  models:
+    - "ridge"
+  primary_model: "ridge"
+  estimate_unreleased_only: true
+  save_feature_snapshot: true
+  save_model_artifact: true
+  min_train_rows: 1000
+  train_window_rows: 2520
+
+availability:
+  market_data_lag_rows: 0
+  official_factor_lag_rows: 1
+  recursive_factor_lags: true
+
+target_features:
+  include_lagged_targets: true
+  lags: [1, 2, 5, 10, 21]
+  rolling_windows: [5, 21, 63]
+  include_rolling_mean: true
+  include_rolling_volatility: true
+  include_rolling_min_max: false
+  include_rf_lags: true

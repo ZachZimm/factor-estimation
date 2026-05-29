@@ -1,0 +1,30 @@
+task:
+  mode: "nowcast"
+  estimate_unreleased_only: false
+
+nowcast:
+  run_name: "market_only_ridge_tft_v1"
+  models:
+    - "rolling_mean"
+    - "ewma"
+    - "ridge"
+    - "tft"
+  primary_model: "ridge"
+  min_train_rows: 1000
+  train_window_rows: 2520
+  backtest_step_rows: 21
+
+availability:
+  market_data_lag_rows: 0
+  official_factor_lag_rows: 1
+  recursive_factor_lags: false
+  release_gap_backtest_days: [1, 2, 3, 5, 10]
+
+target_features:
+  include_lagged_targets: false
+  lags: []
+  rolling_windows: []
+  include_rolling_mean: false
+  include_rolling_volatility: false
+  include_rolling_min_max: false
+  include_rf_lags: false

@@ -12,8 +12,14 @@ def test_proxy_spreads_are_computed_and_missing_tickers_are_skipped() -> None:
         {
             "SPY_ret_1d": [0.00, 0.01, 0.02, -0.01, 0.03, 0.01],
             "IWM_ret_1d": [0.00, 0.03, 0.01, -0.02, 0.04, 0.02],
+            "IJR_ret_1d": [0.00, 0.04, 0.01, -0.03, 0.05, 0.03],
+            "IJH_ret_1d": [0.00, 0.02, 0.01, -0.01, 0.02, 0.02],
             "IVE_ret_1d": [0.00, 0.02, 0.01, 0.01, 0.01, 0.02],
             "IVW_ret_1d": [0.00, 0.01, 0.03, 0.00, 0.02, 0.01],
+            "IWN_ret_1d": [0.00, 0.03, 0.04, -0.01, 0.02, 0.03],
+            "IWO_ret_1d": [0.00, 0.01, 0.02, -0.03, 0.03, 0.01],
+            "IWD_ret_1d": [0.00, 0.02, 0.00, 0.01, 0.01, 0.02],
+            "IWF_ret_1d": [0.00, 0.01, 0.02, 0.00, 0.03, 0.01],
         },
         index=dates,
     )
@@ -24,6 +30,10 @@ def test_proxy_spreads_are_computed_and_missing_tickers_are_skipped() -> None:
     )
 
     assert np.isclose(features.loc[dates[1], "proxy_size_iwm_spy"], 0.02)
+    assert np.isclose(features.loc[dates[1], "proxy_size_ijr_spy"], 0.03)
+    assert np.isclose(features.loc[dates[1], "proxy_size_ijr_ijh"], 0.02)
     assert np.isclose(features.loc[dates[2], "proxy_value_ive_ivw"], -0.02)
+    assert np.isclose(features.loc[dates[2], "proxy_value_iwn_iwo"], 0.02)
+    assert np.isclose(features.loc[dates[2], "proxy_value_iwd_iwf"], -0.02)
     assert "proxy_size_iwm_vti" not in features.columns
     assert not any(features[col].isna().all() for col in features.columns)

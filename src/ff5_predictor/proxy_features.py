@@ -35,7 +35,15 @@ def build_proxy_features(
     if proxy_config.get("include_relative_returns", True):
         spread("proxy_size_iwm_spy", "IWM_ret_1d", "SPY_ret_1d")
         spread("proxy_size_iwm_vti", "IWM_ret_1d", "VTI_ret_1d")
+        spread("proxy_size_ijr_spy", "IJR_ret_1d", "SPY_ret_1d")
+        spread("proxy_size_ijh_spy", "IJH_ret_1d", "SPY_ret_1d")
+        spread("proxy_size_ijr_ijh", "IJR_ret_1d", "IJH_ret_1d")
         spread("proxy_size_ijs_spy", "IJS_ret_1d", "SPY_ret_1d")
+        spread("proxy_breadth_rsp_spy", "RSP_ret_1d", "SPY_ret_1d")
+        spread("proxy_quality_sphq_spy", "SPHQ_ret_1d", "SPY_ret_1d")
+        spread("proxy_realestate_vnq_spy", "VNQ_ret_1d", "SPY_ret_1d")
+        spread("proxy_global_efa_spy", "EFA_ret_1d", "SPY_ret_1d")
+        spread("proxy_global_eem_spy", "EEM_ret_1d", "SPY_ret_1d")
         spread("proxy_sector_xlk_spy", "XLK_ret_1d", "SPY_ret_1d")
         spread("proxy_sector_xlf_spy", "XLF_ret_1d", "SPY_ret_1d")
         spread("proxy_sector_xle_spy", "XLE_ret_1d", "SPY_ret_1d")
@@ -47,8 +55,14 @@ def build_proxy_features(
 
     if proxy_config.get("include_factor_mimic_spreads", True):
         spread("proxy_value_ive_ivw", "IVE_ret_1d", "IVW_ret_1d")
+        spread("proxy_value_iwd_iwf", "IWD_ret_1d", "IWF_ret_1d")
         spread("proxy_value_vbr_vbk", "VBR_ret_1d", "VBK_ret_1d")
+        spread("proxy_value_iwn_iwo", "IWN_ret_1d", "IWO_ret_1d")
         spread("proxy_value_ijs_ijt", "IJS_ret_1d", "IJT_ret_1d")
+        spread("proxy_value_iwn_iwm", "IWN_ret_1d", "IWM_ret_1d")
+        spread("proxy_growth_iwo_iwm", "IWO_ret_1d", "IWM_ret_1d")
+        spread("proxy_value_iwd_ive", "IWD_ret_1d", "IVE_ret_1d")
+        spread("proxy_growth_iwf_ivw", "IWF_ret_1d", "IVW_ret_1d")
 
     if proxy_config.get("include_risk_proxies", True):
         add("proxy_vix_ret", col("^VIX_ret_1d"))

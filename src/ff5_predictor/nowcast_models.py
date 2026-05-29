@@ -22,9 +22,10 @@ class FittedNowcastModel:
     metadata: dict[str, Any]
 
     def predict_frame(self, features: pd.DataFrame) -> np.ndarray:
-        X = features[self.feature_columns].astype(float).to_numpy()
+        X_frame = features[self.feature_columns].astype(float)
+        X = X_frame.to_numpy()
         if self.scaler is not None:
-            X = self.scaler.transform(X)
+            X = self.scaler.transform(X_frame)
         return np.asarray(self.model.predict(X))
 
 
@@ -64,7 +65,8 @@ def fit_ridge_nowcast(
     train_window = int(nowcast_cfg.get("train_window_rows", 2520))
     if train_window > 0:
         train_df = train_df.tail(train_window)
-    X = train_df[feature_columns].astype(float).to_numpy()
+    X_frame = train_df[feature_columns].astype(float)
+    X = X_frame.to_numpy()
     y = train_df[target_columns].astype(float).to_numpy()
     scale = bool(model_cfg.get("scale_features", True))
     scaler = StandardScaler() if scale else None
@@ -73,15 +75,15 @@ def fit_ridge_nowcast(
     selected_alpha = alpha
     validation_rows = int(model_cfg.get("validation_window_rows", 252))
     if bool(model_cfg.get("tune_alpha", True)) and len(train_df) > validation_rows + 10:
-        fit_X = X[:-validation_rows]
+        fit_X = X_frame.iloc[:-validation_rows]
         fit_y = y[:-validation_rows]
-        val_X = X[-validation_rows:]
+        val_X = X_frame.iloc[-validation_rows:]
         val_y = y[-validation_rows:]
         best_score = float("inf")
         for candidate in [float(v) for v in model_cfg.get("alpha_grid", [alpha])]:
             candidate_scaler = StandardScaler() if scale else None
-            candidate_fit_X = candidate_scaler.fit_transform(fit_X) if candidate_scaler else fit_X
-            candidate_val_X = candidate_scaler.transform(val_X) if candidate_scaler else val_X
+            candidate_fit_X = candidate_scaler.fit_transform(fit_X) if candidate_scaler else fit_X.to_numpy()
+            candidate_val_X = candidate_scaler.transform(val_X) if candidate_scaler else val_X.to_numpy()
             candidate_model = Ridge(alpha=candidate)
             candidate_model.fit(candidate_fit_X, fit_y)
             pred = candidate_model.predict(candidate_val_X)
@@ -90,7 +92,7 @@ def fit_ridge_nowcast(
                 best_score = score
                 selected_alpha = candidate
 
-    X_fit = scaler.fit_transform(X) if scaler else X
+    X_fit = scaler.fit_transform(X_frame) if scaler else X
     model = Ridge(alpha=selected_alpha)
     model.fit(X_fit, y)
     return FittedNowcastModel(

@@ -1,0 +1,50 @@
+task:
+  mode: "nowcast"
+  estimate_unreleased_only: true
+
+data:
+  tickers:
+    - "SPY"
+    - "VTI"
+    - "IWM"
+    - "QQQ"
+    - "IVE"
+    - "IVW"
+    - "VBR"
+    - "VBK"
+    - "IJS"
+    - "IJT"
+    - "XLF"
+    - "XLK"
+    - "XLI"
+    - "XLY"
+    - "XLP"
+    - "XLV"
+    - "XLE"
+    - "XLU"
+    - "TLT"
+    - "IEF"
+    - "SHY"
+    - "HYG"
+    - "LQD"
+    - "GLD"
+    - "UUP"
+    - "^VIX"
+    - "IWN"
+    - "IWO"
+    - "IWD"
+    - "IWF"
+    - "IJR"
+    - "IJH"
+
+nowcast:
+  run_name: "production_size_value"
+  models:
+    - "ridge"
+  primary_model: "ridge"
+  estimate_unreleased_only: true
+  save_feature_snapshot: true
+  save_model_artifact: true
+  save_feature_attributions: true
+  min_train_rows: 1000
+  train_window_rows: 2520
