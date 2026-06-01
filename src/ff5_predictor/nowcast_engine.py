@@ -10,6 +10,9 @@ from ff5_predictor.io import normalize_datetime_index
 from ff5_predictor.nowcast_features import build_nowcast_features
 from ff5_predictor.nowcast_models import (
     ewma_predict,
+    fit_elasticnet_nowcast,
+    fit_per_factor_elasticnet_nowcast,
+    fit_per_target_pls_ridge_nowcast,
     fit_ridge_nowcast,
     fit_tft_nowcast,
     rolling_mean_predict,
@@ -54,12 +57,24 @@ def run_nowcast_engine(
     fitted_models: dict[str, Any] = {}
     if "ridge" in models and not train_df.empty:
         fitted_models["ridge"] = fit_ridge_nowcast(train_df, feature_columns, target_columns, config)
+    if "elasticnet" in models and not train_df.empty:
+        fitted_models["elasticnet"] = fit_elasticnet_nowcast(train_df, feature_columns, target_columns, config)
+    if "per_factor_elasticnet" in models and not train_df.empty:
+        fitted_models["per_factor_elasticnet"] = fit_per_factor_elasticnet_nowcast(train_df, feature_columns, target_columns, config)
+    if "per_target_pls_ridge" in models and not train_df.empty:
+        fitted_models["per_target_pls_ridge"] = fit_per_target_pls_ridge_nowcast(train_df, feature_columns, target_columns, config)
     if "tft" in models and not train_df.empty:
         fitted_models["tft"] = fit_tft_nowcast(train_df, feature_columns, target_columns, config)
 
     predictions_by_model: dict[str, pd.DataFrame] = {model: pd.DataFrame() for model in models}
     history_by_model = {model: ff5[target_columns].loc[: spec.cutoff_date].copy() for model in models}
-    feature_history_by_model = {model: train_df[feature_columns].copy() for model in models}
+    feature_history_by_model = {}
+    for model in models:
+        fitted = fitted_models.get(model)
+        if fitted is not None and hasattr(fitted, "extractor") and getattr(fitted, "extractor") is not None and hasattr(fitted, "model_feature_frame"):
+            feature_history_by_model[model] = fitted.model_feature_frame(train_df[feature_columns])
+        else:
+            feature_history_by_model[model] = train_df[feature_columns].copy()
     records: list[dict[str, Any]] = []
     snapshots: list[pd.DataFrame] = []
 
@@ -87,10 +102,61 @@ def run_nowcast_engine(
                     continue
                 pred_values = fitted.predict_frame(row)[0]
                 model_metadata = fitted.metadata
-                snapshot = row.copy()
+                snapshot = fitted.model_feature_frame(row)
                 snapshot["date"] = target_date.date().isoformat()
                 snapshot["model_type"] = model_type
                 snapshots.append(snapshot)
+            elif model_type == "elasticnet":
+                fitted = fitted_models.get("elasticnet")
+                if fitted is None:
+                    continue
+                row = _feature_row(
+                    ff5,
+                    market,
+                    target_date,
+                    spec.cutoff_date,
+                    config,
+                    feature_columns,
+                    predictions_by_model[model_type] if recursive else None,
+                )
+                if row is None:
+                    continue
+                pred_values = fitted.predict_frame(row)[0]
+                model_metadata = fitted.metadata
+            elif model_type == "per_factor_elasticnet":
+                fitted = fitted_models.get("per_factor_elasticnet")
+                if fitted is None:
+                    continue
+                row = _feature_row(
+                    ff5,
+                    market,
+                    target_date,
+                    spec.cutoff_date,
+                    config,
+                    feature_columns,
+                    predictions_by_model[model_type] if recursive else None,
+                )
+                if row is None:
+                    continue
+                pred_values = fitted.predict_frame(row)[0]
+                model_metadata = fitted.metadata
+            elif model_type == "per_target_pls_ridge":
+                fitted = fitted_models.get("per_target_pls_ridge")
+                if fitted is None:
+                    continue
+                row = _feature_row(
+                    ff5,
+                    market,
+                    target_date,
+                    spec.cutoff_date,
+                    config,
+                    feature_columns,
+                    predictions_by_model[model_type] if recursive else None,
+                )
+                if row is None:
+                    continue
+                pred_values = fitted.predict_frame(row)[0]
+                model_metadata = fitted.metadata
             elif model_type == "rolling_mean":
                 history = history_by_model[model_type]
                 if history.empty:
@@ -118,7 +184,8 @@ def run_nowcast_engine(
                 )
                 if row is None:
                     continue
-                feature_history = pd.concat([feature_history_by_model[model_type], row])
+                transformed_row = fitted.model_feature_frame(row)
+                feature_history = pd.concat([feature_history_by_model[model_type], transformed_row])
                 pred_values = fitted.predict_from_history(feature_history)
                 model_metadata = fitted.metadata
             else:
@@ -139,6 +206,9 @@ def run_nowcast_engine(
                 is_unreleased=spec.is_unreleased,
                 actuals=spec.actuals,
             )
+            record["feature_extraction_method"] = _feature_extraction_method(model_metadata)
+            record["n_raw_features"] = model_metadata.get("n_raw_features", len(feature_columns))
+            record["n_model_features"] = model_metadata.get("n_model_features", len(feature_columns))
             release_gap_sizes = _release_gap_sizes(spec, target_date)
             if release_gap_sizes:
                 for release_gap_size in release_gap_sizes:
@@ -151,7 +221,7 @@ def run_nowcast_engine(
                 predictions_by_model[model_type] = pd.concat([predictions_by_model[model_type], pred_frame])
                 history_by_model[model_type] = pd.concat([history_by_model[model_type], pred_frame])
             if model_type == "tft" and row is not None:
-                feature_history_by_model[model_type] = pd.concat([feature_history_by_model[model_type], row])
+                feature_history_by_model[model_type] = pd.concat([feature_history_by_model[model_type], transformed_row])
 
     predictions = pd.DataFrame(records)
     feature_snapshots = pd.concat(snapshots) if snapshots else pd.DataFrame()
@@ -168,11 +238,12 @@ def run_nowcast_engine(
             "recursive_factor_lags": recursive,
             "cutoff_date": pd.Timestamp(spec.cutoff_date).date().isoformat(),
             "latest_market_date": pd.Timestamp(spec.latest_market_date).date().isoformat(),
+            "feature_extraction": _engine_feature_extraction_metadata(fitted_models, feature_columns),
         },
     )
 
 
-def production_prediction_columns(target_columns: list[str]) -> list[str]:
+def nowcast_prediction_columns(target_columns: list[str]) -> list[str]:
     return [
         "date",
         *[f"pred_{column}" for column in target_columns],
@@ -187,6 +258,9 @@ def production_prediction_columns(target_columns: list[str]) -> list[str]:
         "market_data_asof",
         "factor_data_asof",
         "recursive_factor_lags",
+        "feature_extraction_method",
+        "n_raw_features",
+        "n_model_features",
     ]
 
 
@@ -204,23 +278,26 @@ def backtest_prediction_columns(target_columns: list[str]) -> list[str]:
         "market_data_asof",
         "factor_data_asof",
         "recursive_factor_lags",
+        "feature_extraction_method",
+        "n_raw_features",
+        "n_model_features",
         *[f"pred_{column}" for column in target_columns],
         *[f"actual_{column}" for column in target_columns],
     ]
 
 
-def empty_production_predictions(target_columns: list[str]) -> pd.DataFrame:
-    return pd.DataFrame(columns=production_prediction_columns(target_columns))
+def empty_nowcast_predictions(target_columns: list[str]) -> pd.DataFrame:
+    return pd.DataFrame(columns=nowcast_prediction_columns(target_columns))
 
 
 def empty_backtest_predictions(target_columns: list[str]) -> pd.DataFrame:
     return pd.DataFrame(columns=backtest_prediction_columns(target_columns))
 
 
-def select_production_columns(predictions: pd.DataFrame, target_columns: list[str]) -> pd.DataFrame:
-    columns = production_prediction_columns(target_columns)
+def select_nowcast_columns(predictions: pd.DataFrame, target_columns: list[str]) -> pd.DataFrame:
+    columns = nowcast_prediction_columns(target_columns)
     if predictions.empty:
-        return empty_production_predictions(target_columns)
+        return empty_nowcast_predictions(target_columns)
     result = predictions.copy()
     for column in columns:
         if column not in result.columns:
@@ -317,3 +394,26 @@ def _release_gap_sizes(spec: NowcastTargetSpec, target_date: pd.Timestamp) -> li
         return None
     sizes = spec.release_gap_size_by_date.get(pd.Timestamp(target_date), [])
     return [int(size) for size in sizes]
+
+
+def _feature_extraction_method(model_metadata: dict[str, Any]) -> str:
+    metadata = model_metadata.get("feature_extraction")
+    if isinstance(metadata, dict):
+        return str(metadata.get("method", "none" if metadata.get("enabled") is False else "unknown"))
+    return "none"
+
+
+def _engine_feature_extraction_metadata(fitted_models: dict[str, Any], raw_feature_columns: list[str]) -> dict[str, Any]:
+    transformed_counts = {}
+    methods = {}
+    for model_type, fitted in fitted_models.items():
+        metadata = getattr(fitted, "metadata", {}).get("feature_extraction", {})
+        if isinstance(metadata, dict) and metadata.get("method"):
+            methods[model_type] = metadata.get("method")
+        transformed_counts[model_type] = int(getattr(fitted, "metadata", {}).get("n_model_features", len(raw_feature_columns)))
+    return {
+        "enabled": bool(methods),
+        "method_by_model": methods,
+        "raw_feature_count": len(raw_feature_columns),
+        "transformed_feature_count_by_model": transformed_counts,
+    }

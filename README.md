@@ -1,10 +1,10 @@
 # FF5 Predictor
 
-Production-oriented nowcaster for daily Fama-French 5-factor values using market data.
+Nowcast-oriented nowcaster for daily Fama-French 5-factor values using market data.
 
 The primary workflow estimates official FF5 values for recent dates where same-day market data exists but Kenneth French has not yet released the official factors. For nowcast date `t`, market-derived features may use complete after-close market data through `t`.
 
-The active production profile is a market-only all-candidates Ridge model. Historical official FF5 values are used as supervised labels during training, but FF5/RF lag values are not used as input features in the production configs.
+The active nowcast profile is a market-only all-candidates Ridge model. Historical official FF5 values are used as supervised labels during training, but FF5/RF lag values are not used as input features in the latest configs.
 
 ## Install
 
@@ -17,7 +17,7 @@ pip install -e ".[dev]"
 ## Run Nowcast
 
 ```bash
-python -m ff5_predictor.cli nowcast --config config/nowcast/production.yaml
+python -m ff5_predictor.cli nowcast --config config/nowcast/latest.yaml
 ```
 
 Useful commands:
@@ -34,57 +34,78 @@ The full active workflow is also available as:
 ./start_nowcast.sh
 ```
 
-Nowcast outputs are written under `data/nowcasts/<run_name>/<timestamp>/`. The production config also updates `data/nowcasts/production_latest/latest/` as a convenience copy.
+Nowcast outputs are written under `data/nowcasts/<run_name>/<timestamp>/`. The latest config also updates `data/nowcasts/latest/latest/` as a convenience copy.
 
 Historical experiment outputs under `data/experiments`, `data/predictions`, and `data/processed` are not deleted or rewritten by the nowcast workflow.
 
-Production Ridge nowcasts also write attribution artifacts under:
+Ridge nowcasts also write attribution artifacts under:
 
 ```text
-data/nowcasts/production_latest/<timestamp>/attribution/
+data/nowcasts/latest/<timestamp>/attribution/
 ```
 
 These include coefficient tables, per-feature contribution tables, top contribution summaries, and feature-group contribution summaries.
 
-## Historical Forecast Experiments
+## Feature Extraction Experiments
 
-Historical research configs are retained under `config/legacy/`. They are kept for reproducibility and are not the recommended workflow.
-
-The older shifted-market-data experiment commands are still available for research comparison:
+Leakage-safe feature extraction backtests are available for group-wise PCA, PLS, per-target PLS, clustered feature averages, and TFT with compressed group-wise PCA inputs:
 
 ```bash
-python -m ff5_predictor.cli run-all --config config/default.yaml
-python -m ff5_predictor.cli run-experiment --config config/legacy/experiments/tft_patchtst_daily.yaml
+./start_feature_extraction.sh
 ```
 
-Research experiment commands:
+Additional clustered and hybrid Ridge experiments can be run with:
 
 ```bash
-python -m ff5_predictor.cli list-models
-python -m ff5_predictor.cli run-experiment --config config/legacy/experiments/tft_patchtst_daily.yaml
-python -m ff5_predictor.cli run-experiment --config config/legacy/experiments/tft_patchtst_5d.yaml
-python -m ff5_predictor.cli run-experiment --config config/legacy/experiments/tft_patchtst_residual_daily.yaml
-python -m ff5_predictor.cli run-experiment --config config/legacy/experiments/tft_patchtst_residual_5d.yaml
-python -m ff5_predictor.cli train-model --model tft --config config/legacy/experiments/tft_patchtst_daily.yaml
+./start_clustered_hybrid_experiments.sh
 ```
 
-The experiment runner supports stronger baselines, ElasticNet, optional boosting adapters, and PyTorch sequence models:
+The market-only ElasticNet comparison using the same setup as the strongest Ridge backtest can be run with:
+
+```bash
+./start_elasticnet_experiment.sh
+```
+
+The refined ElasticNet grid around the first winning region can be run with:
+
+```bash
+./start_elasticnet_refined_experiment.sh
+```
+
+The per-factor ElasticNet experiment trains one independent ElasticNet per FF5 factor and uses parallel release-gap cutoffs:
+
+```bash
+./start_per_factor_elasticnet_experiment.sh
+```
+
+Individual configs live under:
+
+```text
+config/nowcast/extraction_group_pca.yaml
+config/nowcast/extraction_pls.yaml
+config/nowcast/extraction_per_target_pls.yaml
+config/nowcast/extraction_clustered.yaml
+config/nowcast/extraction_tft_group_pca.yaml
+config/nowcast/extraction_clustered_095.yaml
+config/nowcast/extraction_clustered_098.yaml
+config/nowcast/extraction_clustered_hybrid_098.yaml
+config/nowcast/extraction_group_pca_hybrid.yaml
+config/nowcast/elasticnet_market_only.yaml
+config/nowcast/elasticnet_market_only_refined.yaml
+config/nowcast/per_factor_elasticnet_market_only.yaml
+```
+
+Each extractor is fit inside the cutoff-specific training frame during release-gap backtests, then applied to later target-date rows. Extractors are not fit on hidden official values or target-date inference rows.
+
+The current model registry includes:
 
 - `rolling_mean`
-- `rolling_median`
 - `ewma`
 - `ridge`
+- `per_target_pls_ridge`
 - `elasticnet`
-- `lightgbm`
-- `xgboost`
-- `catboost`
+- `per_factor_elasticnet`
 - `tft`
-
-Hidden/deprecated compatibility models can be listed with:
-
-```bash
-python -m ff5_predictor.cli list-models --include-hidden
-```
 
 ## Factor Viewer
 
@@ -104,6 +125,26 @@ python -m ff5_predictor.cli view-factors \
   --viewer-output data/processed/ff5_factor_viewer.html
 ```
 
+To compare model run outputs against official FF5 factors, pass a predictions CSV or a nowcast run directory. The viewer adds a series mode switch (`Official`, `Predicted`, `Both`, `Error`) plus model and gap-day filters for backtest files:
+
+```bash
+python -m ff5_predictor.cli view-factors \
+  --config config/nowcast/backtest_release_gap.yaml \
+  --run-dir data/nowcasts/<run_name>/latest \
+  --model-type ridge \
+  --gap-day 1 \
+  --open-browser
+```
+
+You can also point directly at a predictions file:
+
+```bash
+python -m ff5_predictor.cli view-factors \
+  --config config/default.yaml \
+  --predictions-csv data/nowcasts/<run_name>/latest/predictions/release_gap_predictions.csv \
+  --model-type ridge
+```
+
 ## Data
 
 Fama-French data is loaded from `getFamaFrenchFactors` when practical, otherwise from the official Kenneth French remote zip. Existing repository-local FF5 CSV or zip files are ignored. Factor values are stored internally as decimal returns, so a Kenneth French value of `1.25` becomes `0.0125`.
@@ -117,11 +158,8 @@ Downloaded and cleaned data is cached as Parquet with JSON metadata sidecars und
 - `data/nowcasts/<run_name>/<timestamp>/predictions/latest_nowcast.csv`
 - `data/nowcasts/<run_name>/<timestamp>/attribution/*.csv`
 - `data/nowcasts/<run_name>/<timestamp>/metrics/*.json`
-- `data/processed/modeling_dataset.parquet`
-- `data/predictions/ff5_predictions.csv`
-- `data/predictions/metrics.json`
-- `data/experiments/<run_name>/predictions/*.csv`
-- `data/experiments/<run_name>/metrics/*.json`
+- `data/nowcasts/<run_name>/<timestamp>/predictions/release_gap_predictions.csv`
+- `data/nowcasts/<run_name>/<timestamp>/metrics/model_ranking.csv`
 
 ## Tests
 

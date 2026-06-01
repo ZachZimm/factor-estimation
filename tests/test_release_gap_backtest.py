@@ -74,3 +74,15 @@ def test_release_gap_backtest_outputs_gap_metadata_and_metrics(tmp_path) -> None
     assert (pd.to_datetime(result.predictions["target_date"]) > pd.to_datetime(result.predictions["cutoff_date"])).all()
     assert "metrics_by_gap_day" in result.gap_metrics
     assert (result.run_dir / "metrics" / "model_ranking.csv").exists()
+
+
+def test_release_gap_backtest_parallel_cutoffs(tmp_path) -> None:
+    config = _config(tmp_path)
+    config["nowcast"]["run_name"] = "gap_parallel_test"
+    config["backtest"] = {"n_jobs": 2, "backend": "loky", "verbose": 0}
+    ff5, market = _frames()
+    result = run_release_gap_backtest_from_frames(ff5, market, config)
+
+    assert not result.predictions.empty
+    metadata = (result.run_dir / "metadata" / "backtest_metadata.json").read_text()
+    assert '"backtest_n_jobs": 2' in metadata

@@ -25,7 +25,7 @@ def evaluate_predictions(
     for column in target_columns:
         pred = predictions[f"pred_{column}"].astype(float)
         actual = predictions[f"actual_{column}"].astype(float)
-        corr = pred.corr(actual)
+        corr = _safe_series_corr(pred, actual)
         metrics_by_factor[column] = {
             "mae": float(mean_absolute_error(actual, pred)),
             "rmse": float(math.sqrt(mean_squared_error(actual, pred))),
@@ -196,3 +196,20 @@ def _quantile_hit_rate(pred: pd.Series, actual: pd.Series, upper: bool) -> float
     actual_threshold = actual.quantile(0.8 if upper else 0.2)
     actual_hit = actual >= actual_threshold if upper else actual <= actual_threshold
     return float(actual_hit[mask].mean())
+
+
+def _safe_series_corr(left: pd.Series, right: pd.Series) -> float | None:
+    if len(left) < 2 or len(right) < 2:
+        return None
+    left_values = left.to_numpy(dtype=float)
+    right_values = right.to_numpy(dtype=float)
+    mask = np.isfinite(left_values) & np.isfinite(right_values)
+    if mask.sum() < 2:
+        return None
+    left_centered = left_values[mask] - left_values[mask].mean()
+    right_centered = right_values[mask] - right_values[mask].mean()
+    left_norm = float(np.sqrt(np.sum(left_centered * left_centered)))
+    right_norm = float(np.sqrt(np.sum(right_centered * right_centered)))
+    if left_norm == 0.0 or right_norm == 0.0:
+        return None
+    return float(np.sum(left_centered * right_centered) / (left_norm * right_norm))

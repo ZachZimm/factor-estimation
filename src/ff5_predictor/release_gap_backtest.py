@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from joblib import Parallel, delayed
 import pandas as pd
 
 from ff5_predictor.availability import make_release_gap_splits
@@ -52,11 +53,31 @@ def run_release_gap_backtest_from_frames(
     for split in splits:
         grouped.setdefault(split.cutoff_date, []).append(split)
 
-    records: list[dict[str, Any]] = []
+    tasks = []
     for cutoff_date, cutoff_splits in grouped.items():
         max_gap = max(split.gap_size for split in cutoff_splits)
         target_dates = pd.DatetimeIndex(aligned_dates[(aligned_dates > cutoff_date)]).sort_values()[:max_gap]
-        result = _predict_gap_for_cutoff(ff5, market, cutoff_date, target_dates, cutoff_splits, config)
+        tasks.append((cutoff_date, target_dates, cutoff_splits))
+
+    backtest_cfg = config.get("backtest", {})
+    n_jobs = int(backtest_cfg.get("n_jobs", 1))
+    if n_jobs == 1 or len(tasks) <= 1:
+        results = [
+            _predict_gap_for_cutoff(ff5, market, cutoff_date, target_dates, cutoff_splits, config)
+            for cutoff_date, target_dates, cutoff_splits in tasks
+        ]
+    else:
+        results = Parallel(
+            n_jobs=n_jobs,
+            backend=str(backtest_cfg.get("backend", "loky")),
+            verbose=int(backtest_cfg.get("verbose", 0)),
+        )(
+            delayed(_predict_gap_for_cutoff)(ff5, market, cutoff_date, target_dates, cutoff_splits, config)
+            for cutoff_date, target_dates, cutoff_splits in tasks
+        )
+
+    records: list[dict[str, Any]] = []
+    for result in results:
         records.extend(result.to_dict(orient="records"))
 
     predictions = select_backtest_columns(pd.DataFrame(records), target_columns)
@@ -73,6 +94,7 @@ def run_release_gap_backtest_from_frames(
     write_json(run_dir / "metrics" / "shared_date_metrics.json", shared)
     write_json(run_dir / "metrics" / "gap_metrics.json", gap_metrics)
     write_json(run_dir / "metadata" / "backtest_metadata.json", _backtest_metadata(config, predictions))
+    write_json(run_dir / "metadata" / "feature_extraction_metadata.json", _feature_extraction_metadata(config, predictions))
     return ReleaseGapBacktestResult(predictions=predictions, metrics=metrics, gap_metrics=gap_metrics, run_dir=run_dir)
 
 
@@ -129,13 +151,28 @@ def _training_frame(
 
 def _backtest_metadata(config: dict[str, Any], predictions: pd.DataFrame) -> dict[str, Any]:
     return {
-        "production_profile": "market_only_all_candidates",
+        "nowcast_profile": "market_only_all_candidates",
         "n_tickers": int(len(config.get("data", {}).get("tickers", []))),
         "uses_ff5_input_features": bool(config.get("target_features", {}).get("include_lagged_targets", False)),
         "uses_recursive_factor_lags": bool(config.get("availability", {}).get("recursive_factor_lags", True)),
         "models": list(config.get("nowcast", {}).get("models", [])),
         "release_gap_backtest_days": list(config.get("availability", {}).get("release_gap_backtest_days", [])),
         "n_prediction_rows": int(len(predictions)),
+        "backtest_n_jobs": int(config.get("backtest", {}).get("n_jobs", 1)),
+    }
+
+
+def _feature_extraction_metadata(config: dict[str, Any], predictions: pd.DataFrame) -> dict[str, Any]:
+    cfg = config.get("feature_extraction", {})
+    return {
+        "enabled": bool(cfg.get("enabled", False)),
+        "method": cfg.get("method", "none"),
+        "apply_to_models": list(cfg.get("apply_to_models", [])),
+        "keep_original_features": bool(cfg.get("keep_original_features", False)),
+        "n_prediction_rows": int(len(predictions)),
+        "methods_in_predictions": sorted(predictions["feature_extraction_method"].dropna().unique().tolist())
+        if "feature_extraction_method" in predictions.columns and not predictions.empty
+        else [],
     }
 
 

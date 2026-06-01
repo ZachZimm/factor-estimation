@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from ff5_predictor.production_nowcast import run_production_nowcast_from_frames
+from ff5_predictor.latest_nowcast import run_latest_nowcast_from_frames
 
 
 TARGETS = ["Mkt-RF", "SMB", "HML", "RMW", "CMA"]
@@ -62,8 +62,8 @@ def _market(n: int = 8) -> pd.DataFrame:
     )
 
 
-def test_production_nowcast_writes_predictions_and_model_artifact(tmp_path) -> None:
-    result = run_production_nowcast_from_frames(_ff5(), _market(), _config(tmp_path))
+def test_latest_nowcast_writes_predictions_and_model_artifact(tmp_path) -> None:
+    result = run_latest_nowcast_from_frames(_ff5(), _market(), _config(tmp_path))
 
     assert not result.predictions.empty
     assert {"pred_Mkt-RF", "factor_data_asof", "market_data_asof"}.issubset(result.predictions.columns)
@@ -72,15 +72,15 @@ def test_production_nowcast_writes_predictions_and_model_artifact(tmp_path) -> N
     assert not (tmp_path / "test_nowcast").joinpath("latest").exists()
 
 
-def test_production_nowcast_writes_empty_when_no_unreleased_dates(tmp_path) -> None:
-    result = run_production_nowcast_from_frames(_ff5(6), _market(6), _config(tmp_path))
+def test_latest_nowcast_writes_empty_when_no_unreleased_dates(tmp_path) -> None:
+    result = run_latest_nowcast_from_frames(_ff5(6), _market(6), _config(tmp_path))
 
     assert result.predictions.empty
     assert "pred_Mkt-RF" in result.predictions.columns
     assert (result.run_dir / "predictions" / "latest_nowcast.csv").exists()
 
 
-def test_production_nowcast_tft_smoke(tmp_path) -> None:
+def test_latest_nowcast_tft_smoke(tmp_path) -> None:
     cfg = _config(tmp_path)
     cfg["nowcast"]["models"] = ["tft"]
     cfg["nowcast"]["save_model_artifact"] = False
@@ -97,7 +97,7 @@ def test_production_nowcast_tft_smoke(tmp_path) -> None:
     }
     cfg["models"]["tft"] = {"hidden_size": 8, "n_heads": 1, "lstm_layers": 1, "dropout": 0.0}
 
-    result = run_production_nowcast_from_frames(_ff5(7), _market(8), cfg)
+    result = run_latest_nowcast_from_frames(_ff5(7), _market(8), cfg)
 
     assert not result.predictions.empty
     assert set(result.predictions["model_type"]) == {"tft"}

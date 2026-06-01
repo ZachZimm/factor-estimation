@@ -1,0 +1,23 @@
+task:
+  mode: "nowcast"
+  estimate_unreleased_only: true
+
+nowcast:
+  run_name: "latest"
+  models:
+    - "ridge"
+  primary_model: "ridge"
+  estimate_unreleased_only: true
+  save_feature_snapshot: true
+  save_model_artifact: true
+  save_feature_attributions: true
+  min_train_rows: 1000
+  train_window_rows: 2520
+
+models:
+  ridge:
+    alpha: 10.0
+    alpha_grid: [0.1, 1.0, 3.0, 10.0, 30.0, 100.0]
+    tune_alpha: true
+    validation_window_rows: 252
+    scale_features: true

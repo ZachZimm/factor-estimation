@@ -79,15 +79,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "include_rolling_min_max": False,
         "include_rf_lags": False,
     },
-    "training": {
-        "train_window_days": 1260,
-        "min_train_rows": 1000,
-        "step_size": 1,
-        "model_type": "ridge",
-        "scale_features": True,
-        "refit_each_step": True,
-        "save_models": False,
-    },
     "prediction": {
         "horizon": 1,
         "target_mode": "daily",
@@ -103,14 +94,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "release_gap_backtest_days": [1, 2, 3, 5, 10],
     },
     "output": {
-        "predictions_path": "data/predictions/ff5_predictions.csv",
-        "metrics_path": "data/predictions/metrics.json",
-        "models_dir": "data/models",
         "force_overwrite": False,
     },
     "nowcast": {
         "output_dir": "data/nowcasts",
-        "run_name": "production_latest",
+        "run_name": "latest",
         "models": ["ridge"],
         "primary_model": "ridge",
         "estimate_unreleased_only": True,
@@ -124,28 +112,46 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "attribution": {
         "top_n": 20,
     },
-    "experiments": {
-        "output_dir": "data/experiments",
-        "run_name": None,
-        "random_seed": 42,
-        "models": [
-            "rolling_mean",
-            "ewma",
-            "elasticnet",
-            "ridge",
-            "patchtst",
-            "tft",
-        ],
+    "backtest": {
+        "n_jobs": 1,
+        "backend": "loky",
+        "verbose": 0,
     },
-    "walk_forward": {
-        "checkpoint_frequency": "M",
-        "train_window_rows": 1260,
-        "min_train_rows": 1000,
-        "min_fit_rows": 1000,
-        "validation_window_rows": 252,
-        "require_validation": False,
-        "predict_between_checkpoints": True,
-        "refit_on_each_checkpoint": True,
+    "feature_extraction": {
+        "enabled": False,
+        "method": "none",
+        "apply_to_models": ["ridge"],
+        "output_prefix": "fx",
+        "save_transformer_artifact": False,
+        "keep_original_features": False,
+        "group_pca": {
+            "scale_before_pca": True,
+            "groups": {
+                "market_returns": {"patterns": ["*_ret_1d", "*_log_ret_1d"], "n_components": 8},
+                "ohlc_intraday": {"patterns": ["*_oc_ret", "*_hl_range", "*_gap", "*_hl_range_mean_*"], "n_components": 8},
+                "rolling_returns": {"patterns": ["*_ret_*d"], "n_components": 10},
+                "rolling_volatility": {"patterns": ["*_vol_*d"], "n_components": 10},
+                "drawdown": {"patterns": ["*_drawdown_*d"], "n_components": 5},
+                "proxy_size": {"patterns": ["proxy_size_*"], "n_components": 4},
+                "proxy_value": {"patterns": ["proxy_value_*", "proxy_growth_*"], "n_components": 4},
+                "proxy_sector": {"patterns": ["proxy_sector_*"], "n_components": 6},
+                "proxy_risk": {"patterns": ["proxy_credit_*", "proxy_vix_*", "proxy_tlt_*"], "n_components": 4},
+                "proxy_global": {"patterns": ["proxy_global_*"], "n_components": 3},
+                "proxy_quality": {"patterns": ["proxy_quality_*"], "n_components": 2},
+                "proxy_realestate": {"patterns": ["proxy_realestate_*"], "n_components": 2},
+                "other": {"patterns": ["*"], "n_components": 10},
+            },
+        },
+        "pls": {"n_components": 20, "scale_features": True, "scale_targets": False},
+        "per_target_pls": {"n_components": 10, "scale_features": True, "scale_targets": False},
+        "clustered": {
+            "correlation_threshold": 0.92,
+            "max_features_for_clustering": 2000,
+            "min_cluster_size": 2,
+            "singleton_policy": "keep",
+            "representative": "mean",
+            "scale_before_clustering": True,
+        },
     },
     "sequence": {
         "lookback_rows": 63,
@@ -176,21 +182,27 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "validation_window_rows": 252,
             "scale_features": True,
         },
-        "elasticnet": {"alpha": 0.001, "l1_ratio": 0.2, "max_iter": 50000, "tol": 0.0001},
-        "ewma": {"spans": [5, 21, 63], "default_span": 21},
-        "mlp_window": {"hidden_sizes": [512, 256, 128], "activation": "gelu"},
-        "tcn": {"channels": [64, 64, 128, 128], "kernel_size": 3, "dropout": 0.15},
-        "patchtst": {
-            "enabled": False,
-            "hidden": True,
-            "patch_len": 8,
-            "stride": 4,
-            "d_model": 64,
-            "n_heads": 4,
-            "num_layers": 2,
-            "dim_feedforward": 128,
-            "dropout": 0.25,
+        "elasticnet": {
+            "alpha": 0.001,
+            "alpha_grid": [0.0003, 0.001, 0.003, 0.01],
+            "l1_ratio": 0.05,
+            "max_iter": 50000,
+            "tol": 0.0001,
+            "tune_alpha": True,
+            "validation_window_rows": 252,
+            "scale_features": True,
         },
+        "per_factor_elasticnet": {
+            "alpha": 0.001,
+            "alpha_grid": [0.0003, 0.001, 0.003, 0.01],
+            "l1_ratio": 0.05,
+            "max_iter": 50000,
+            "tol": 0.0001,
+            "tune_alpha": True,
+            "validation_window_rows": 252,
+            "scale_features": True,
+        },
+        "ewma": {"spans": [5, 21, 63], "default_span": 21},
         "tft": {"enabled": True, "hidden_size": 64, "n_heads": 4, "lstm_layers": 1, "dropout": 0.25},
     },
     "proxy_features": {
@@ -202,13 +214,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "fundamentals": {
         "enabled": False,
-    },
-    "regimes": {
-        "enabled": True,
-        "volatility_source": "SPY_vol_21d",
-        "high_vol_quantile": 0.8,
-        "low_vol_quantile": 0.2,
-        "market_return_source": "SPY_ret_21d",
     },
 }
 
@@ -233,7 +238,7 @@ def load_config(path: str | Path = "config/default.yaml") -> dict[str, Any]:
 
 
 def validate_config(config: dict[str, Any]) -> None:
-    for section in ("data", "features", "training", "prediction", "output"):
+    for section in ("data", "features", "prediction", "output", "nowcast"):
         if section not in config:
             raise ValueError(f"Missing required config section: {section}")
 
@@ -243,9 +248,6 @@ def validate_config(config: dict[str, Any]) -> None:
 
     if int(config["prediction"].get("horizon", 1)) < 1:
         raise ValueError("prediction.horizon must be at least 1")
-
-    if int(config["training"].get("train_window_days", 0)) < 1:
-        raise ValueError("training.train_window_days must be positive")
 
     targets = config["prediction"].get("target_columns")
     if not targets:

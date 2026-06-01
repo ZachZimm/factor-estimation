@@ -3,7 +3,7 @@ task:
   estimate_unreleased_only: true
 
 nowcast:
-  run_name: "production_market_only_diagnostic_v1"
+  run_name: "market_only_diagnostic_v1"
   models:
     - "ridge"
   primary_model: "ridge"

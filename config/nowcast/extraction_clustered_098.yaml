@@ -1,0 +1,42 @@
+task:
+  mode: "nowcast"
+  estimate_unreleased_only: false
+
+target_features:
+  include_lagged_targets: false
+  lags: []
+  rolling_windows: []
+  include_rolling_mean: false
+  include_rolling_volatility: false
+  include_rolling_min_max: false
+  include_rf_lags: false
+
+availability:
+  market_data_lag_rows: 0
+  official_factor_lag_rows: 1
+  recursive_factor_lags: false
+  release_gap_backtest_days: [1, 2, 3, 5, 10]
+
+nowcast:
+  run_name: "feature_extraction_clustered_098_v1"
+  models:
+    - "rolling_mean"
+    - "ewma"
+    - "ridge"
+  primary_model: "ridge"
+  min_train_rows: 1000
+  train_window_rows: 2520
+  backtest_step_rows: 21
+
+feature_extraction:
+  enabled: true
+  method: "clustered"
+  apply_to_models: ["ridge"]
+  keep_original_features: false
+  clustered:
+    correlation_threshold: 0.98
+    max_features_for_clustering: 2000
+    min_cluster_size: 2
+    singleton_policy: "keep"
+    representative: "mean"
+    scale_before_clustering: true
