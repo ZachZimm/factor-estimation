@@ -28,6 +28,20 @@ python -m ff5_predictor.cli build-nowcast-dataset --config config/nowcast/diagno
 python -m ff5_predictor.cli list-models
 ```
 
+To restrict prediction output to a specific target date or date range, pass `--start-date` and/or `--end-date`. The historical training window is not truncated; only prediction/inference target dates are filtered.
+
+```bash
+python -m ff5_predictor.cli nowcast \
+  --config config/nowcast/latest.yaml \
+  --start-date 2026-05-29 \
+  --end-date 2026-05-29
+
+python -m ff5_predictor.cli backtest-nowcast \
+  --config config/nowcast/backtest_release_gap.yaml \
+  --start-date 2025-01-01 \
+  --end-date 2025-01-31
+```
+
 The full active workflow is also available as:
 
 ```bash

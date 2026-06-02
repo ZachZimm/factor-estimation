@@ -7,7 +7,7 @@ from typing import Any
 from joblib import Parallel, delayed
 import pandas as pd
 
-from ff5_predictor.availability import make_release_gap_splits
+from ff5_predictor.availability import filter_dates_by_config, make_release_gap_splits
 from ff5_predictor.data_famafrench import load_ff5
 from ff5_predictor.data_yfinance import load_market_data
 from ff5_predictor.evaluation import evaluate_on_shared_dates, evaluate_prediction_groups, rank_models
@@ -56,15 +56,21 @@ def run_release_gap_backtest_from_frames(
     tasks = []
     for cutoff_date, cutoff_splits in grouped.items():
         max_gap = max(split.gap_size for split in cutoff_splits)
-        target_dates = pd.DatetimeIndex(aligned_dates[(aligned_dates > cutoff_date)]).sort_values()[:max_gap]
-        tasks.append((cutoff_date, target_dates, cutoff_splits))
+        raw_target_dates = pd.DatetimeIndex(aligned_dates[(aligned_dates > cutoff_date)]).sort_values()[:max_gap]
+        selected_target_dates = filter_dates_by_config(raw_target_dates, config)
+        if len(selected_target_dates):
+            if bool(config.get("availability", {}).get("recursive_factor_lags", True)):
+                engine_target_dates = pd.DatetimeIndex(raw_target_dates[raw_target_dates <= selected_target_dates.max()])
+            else:
+                engine_target_dates = selected_target_dates
+            tasks.append((cutoff_date, engine_target_dates, selected_target_dates, cutoff_splits))
 
     backtest_cfg = config.get("backtest", {})
     n_jobs = int(backtest_cfg.get("n_jobs", 1))
     if n_jobs == 1 or len(tasks) <= 1:
         results = [
-            _predict_gap_for_cutoff(ff5, market, cutoff_date, target_dates, cutoff_splits, config)
-            for cutoff_date, target_dates, cutoff_splits in tasks
+            _predict_gap_for_cutoff(ff5, market, cutoff_date, target_dates, selected_dates, cutoff_splits, config)
+            for cutoff_date, target_dates, selected_dates, cutoff_splits in tasks
         ]
     else:
         results = Parallel(
@@ -72,8 +78,8 @@ def run_release_gap_backtest_from_frames(
             backend=str(backtest_cfg.get("backend", "loky")),
             verbose=int(backtest_cfg.get("verbose", 0)),
         )(
-            delayed(_predict_gap_for_cutoff)(ff5, market, cutoff_date, target_dates, cutoff_splits, config)
-            for cutoff_date, target_dates, cutoff_splits in tasks
+            delayed(_predict_gap_for_cutoff)(ff5, market, cutoff_date, target_dates, selected_dates, cutoff_splits, config)
+            for cutoff_date, target_dates, selected_dates, cutoff_splits in tasks
         )
 
     records: list[dict[str, Any]] = []
@@ -103,6 +109,7 @@ def _predict_gap_for_cutoff(
     market: pd.DataFrame,
     cutoff_date: pd.Timestamp,
     target_dates: pd.DatetimeIndex,
+    selected_target_dates: pd.DatetimeIndex,
     cutoff_splits: list,
     config: dict[str, Any],
 ) -> pd.DataFrame:
@@ -132,7 +139,8 @@ def _predict_gap_for_cutoff(
         spec=spec,
         config=config,
     )
-    return select_backtest_columns(result.predictions, target_columns)
+    predictions = select_backtest_columns(result.predictions, target_columns)
+    return _filter_prediction_frame(predictions, selected_target_dates)
 
 
 def _training_frame(
@@ -157,6 +165,7 @@ def _backtest_metadata(config: dict[str, Any], predictions: pd.DataFrame) -> dic
         "uses_recursive_factor_lags": bool(config.get("availability", {}).get("recursive_factor_lags", True)),
         "models": list(config.get("nowcast", {}).get("models", [])),
         "release_gap_backtest_days": list(config.get("availability", {}).get("release_gap_backtest_days", [])),
+        "date_filter": dict(config.get("date_filter", {})),
         "n_prediction_rows": int(len(predictions)),
         "backtest_n_jobs": int(config.get("backtest", {}).get("n_jobs", 1)),
     }
@@ -189,3 +198,11 @@ def _gap_metrics(predictions: pd.DataFrame, target_columns: list[str]) -> dict[s
             for size, group in predictions.groupby("release_gap_size")
         },
     }
+
+
+def _filter_prediction_frame(predictions: pd.DataFrame, selected_target_dates: pd.DatetimeIndex) -> pd.DataFrame:
+    if predictions.empty or len(selected_target_dates) == 0:
+        return predictions.iloc[0:0].copy()
+    selected = set(pd.DatetimeIndex(selected_target_dates).date)
+    dates = pd.to_datetime(predictions["target_date"]).dt.date
+    return predictions.loc[dates.isin(selected)].reset_index(drop=True)

@@ -5,7 +5,12 @@ from typing import Any
 
 import pandas as pd
 
-from ff5_predictor.availability import latest_market_date, latest_official_factor_date, unreleased_market_dates
+from ff5_predictor.availability import (
+    filter_dates_by_config,
+    latest_market_date,
+    latest_official_factor_date,
+    unreleased_market_dates,
+)
 from ff5_predictor.io import normalize_datetime_index
 from ff5_predictor.nowcast_features import build_nowcast_features
 
@@ -32,7 +37,8 @@ def build_nowcast_dataset(
     target_columns = list(config["prediction"]["target_columns"])
     official_date = latest_official_factor_date(ff5)
     market_date = latest_market_date(market)
-    unreleased = unreleased_market_dates(ff5, market)
+    all_unreleased = unreleased_market_dates(ff5, market)
+    unreleased = filter_dates_by_config(all_unreleased, config)
 
     train_features = build_nowcast_features(ff5, market.loc[:official_date], config)
     train_df = train_features.features.join(ff5[target_columns], how="inner")
@@ -68,9 +74,11 @@ def build_nowcast_dataset(
         metadata={
             "latest_official_factor_date": str(official_date.date()),
             "latest_market_date": str(market_date.date()),
+            "n_all_unreleased_dates": int(len(all_unreleased)),
             "n_unreleased_dates": int(len(unreleased)),
             "n_train_rows": int(len(train_df)),
             "n_inference_rows": int(len(inference_df)),
+            "date_filter": dict(config.get("date_filter", {})),
             "feature_columns": feature_columns,
             "target_columns": target_columns,
             "feature_metadata": train_features.metadata,

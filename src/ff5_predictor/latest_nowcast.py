@@ -7,6 +7,7 @@ from typing import Any
 import pandas as pd
 
 from ff5_predictor.attribution import explain_ridge_predictions
+from ff5_predictor.availability import unreleased_market_dates
 from ff5_predictor.data_famafrench import load_ff5
 from ff5_predictor.data_yfinance import load_market_data
 from ff5_predictor.io import ensure_dir
@@ -53,9 +54,11 @@ def run_latest_nowcast_from_frames(
     write_yaml(run_dir / "config_resolved.yaml", config)
     dataset = build_nowcast_dataset(ff5_df, market_df, config)
     write_json(run_dir / "metadata" / "dataset_metadata.json", dataset.metadata)
+    selected_target_dates = dataset.unreleased_dates
+    engine_target_dates = _engine_target_dates(ff5_df, market_df, selected_target_dates, config)
 
     spec = NowcastTargetSpec(
-        target_dates=dataset.unreleased_dates,
+        target_dates=engine_target_dates,
         cutoff_date=dataset.latest_official_date,
         latest_market_date=dataset.latest_market_date,
         actuals=None,
@@ -72,7 +75,8 @@ def run_latest_nowcast_from_frames(
         config=config,
     )
     predictions = select_nowcast_columns(engine_result.predictions, dataset.target_columns)
-    if len(dataset.unreleased_dates) == 0:
+    predictions = _filter_prediction_frame(predictions, selected_target_dates)
+    if len(selected_target_dates) == 0:
         predictions = empty_nowcast_predictions(dataset.target_columns)
     feature_snapshot = engine_result.feature_snapshots
 
@@ -153,3 +157,26 @@ def save_primary_model_artifact(
 ) -> None:
     ensure_dir(run_dir / "models")
     save_fitted_model(fitted, run_dir / "models" / f"{fitted.model_type}.joblib")
+
+
+def _engine_target_dates(
+    ff5_df: pd.DataFrame,
+    market_df: pd.DataFrame,
+    selected_target_dates: pd.DatetimeIndex,
+    config: dict[str, Any],
+) -> pd.DatetimeIndex:
+    if len(selected_target_dates) == 0:
+        return selected_target_dates
+    recursive = bool(config.get("availability", {}).get("recursive_factor_lags", True))
+    if not recursive:
+        return selected_target_dates
+    all_unreleased = unreleased_market_dates(ff5_df, market_df)
+    return pd.DatetimeIndex(all_unreleased[all_unreleased <= selected_target_dates.max()])
+
+
+def _filter_prediction_frame(predictions: pd.DataFrame, selected_target_dates: pd.DatetimeIndex) -> pd.DataFrame:
+    if predictions.empty or len(selected_target_dates) == 0:
+        return predictions.iloc[0:0].copy()
+    selected = set(pd.DatetimeIndex(selected_target_dates).date)
+    dates = pd.to_datetime(predictions["date"]).dt.date
+    return predictions.loc[dates.isin(selected)].reset_index(drop=True)

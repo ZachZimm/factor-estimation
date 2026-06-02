@@ -150,7 +150,8 @@ def rank_models(
         values = list(factor_metrics.values())
         avg_mae = float(np.mean([m["mae"] for m in values]))
         avg_rmse = float(np.mean([m["rmse"] for m in values]))
-        avg_r2 = float(np.mean([m["r2"] for m in values if m["r2"] is not None]))
+        r2_values = [m["r2"] for m in values if m["r2"] is not None]
+        avg_r2 = float(np.mean(r2_values)) if r2_values else np.nan
         avg_corr = float(np.mean([m["correlation"] or 0.0 for m in values]))
         avg_dir = float(np.mean([m["directional_accuracy"] for m in values]))
         rows.append(

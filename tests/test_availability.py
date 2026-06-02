@@ -3,6 +3,7 @@ from __future__ import annotations
 import pandas as pd
 
 from ff5_predictor.availability import (
+    filter_dates_by_config,
     latest_market_date,
     latest_official_factor_date,
     make_release_gap_splits,
@@ -22,3 +23,13 @@ def test_availability_dates_and_release_gaps() -> None:
     assert splits[0].cutoff_date == pd.Timestamp("2024-01-03")
     assert all(date > split.cutoff_date for split in splits for date in split.target_dates)
     assert {split.gap_size for split in splits} == {1, 3}
+
+
+def test_filter_dates_by_config() -> None:
+    dates = pd.date_range("2024-01-01", periods=5)
+    filtered = filter_dates_by_config(
+        dates,
+        {"date_filter": {"start_date": "2024-01-02", "end_date": "2024-01-04"}},
+    )
+
+    assert list(filtered) == list(pd.date_range("2024-01-02", "2024-01-04"))

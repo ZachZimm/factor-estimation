@@ -80,6 +80,18 @@ def test_latest_nowcast_writes_empty_when_no_unreleased_dates(tmp_path) -> None:
     assert (result.run_dir / "predictions" / "latest_nowcast.csv").exists()
 
 
+def test_latest_nowcast_filters_prediction_dates(tmp_path) -> None:
+    cfg = _config(tmp_path)
+    cfg["date_filter"] = {"start_date": "2024-01-09", "end_date": "2024-01-09"}
+    result = run_latest_nowcast_from_frames(_ff5(6), _market(8), cfg)
+
+    assert not result.predictions.empty
+    assert set(pd.to_datetime(result.predictions["date"])) == {pd.Timestamp("2024-01-09")}
+    assert set(result.predictions["gap_day"]) == {2}
+    assert result.metadata["n_all_unreleased_dates"] == 2
+    assert result.metadata["n_unreleased_dates"] == 1
+
+
 def test_latest_nowcast_tft_smoke(tmp_path) -> None:
     cfg = _config(tmp_path)
     cfg["nowcast"]["models"] = ["tft"]

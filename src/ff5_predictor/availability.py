@@ -38,6 +38,18 @@ def unreleased_market_dates(
     return pd.DatetimeIndex(market.index[market.index > official_date])
 
 
+def filter_dates_by_config(dates: pd.DatetimeIndex, config: dict) -> pd.DatetimeIndex:
+    clean_dates = pd.DatetimeIndex(pd.to_datetime(dates).tz_localize(None)).sort_values().unique()
+    date_filter = config.get("date_filter", {})
+    start = date_filter.get("start_date")
+    end = date_filter.get("end_date")
+    if start:
+        clean_dates = clean_dates[clean_dates >= pd.Timestamp(start)]
+    if end:
+        clean_dates = clean_dates[clean_dates <= pd.Timestamp(end)]
+    return pd.DatetimeIndex(clean_dates)
+
+
 def make_release_gap_splits(
     dates: pd.DatetimeIndex,
     gap_sizes: list[int],

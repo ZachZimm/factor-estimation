@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 import logging
 import webbrowser
 from pathlib import Path
@@ -30,6 +31,17 @@ def cmd_download_data(config: dict) -> None:
     load_ff5(config)
     load_market_data(config)
     LOGGER.info("Downloaded or loaded cached source data")
+
+
+def config_with_date_filter(config: dict, start_date: str | None, end_date: str | None) -> dict:
+    if not start_date and not end_date:
+        return config
+    filtered = deepcopy(config)
+    filtered["date_filter"] = {
+        "start_date": start_date,
+        "end_date": end_date,
+    }
+    return filtered
 
 
 def cmd_nowcast(config: dict) -> None:
@@ -123,8 +135,8 @@ def build_parser() -> argparse.ArgumentParser:
         ],
     )
     parser.add_argument("--config", default="config/default.yaml")
-    parser.add_argument("--start-date", help="Start date for view-factors, YYYY-MM-DD")
-    parser.add_argument("--end-date", help="End date for view-factors, YYYY-MM-DD")
+    parser.add_argument("--start-date", help="Start date for prediction or view filtering, YYYY-MM-DD")
+    parser.add_argument("--end-date", help="End date for prediction or view filtering, YYYY-MM-DD")
     parser.add_argument(
         "--viewer-output",
         default="data/processed/ff5_factor_viewer.html",
@@ -152,11 +164,11 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "download-data":
         cmd_download_data(config)
     elif args.command == "nowcast":
-        cmd_nowcast(config)
+        cmd_nowcast(config_with_date_filter(config, args.start_date, args.end_date))
     elif args.command == "backtest-nowcast":
-        cmd_backtest_nowcast(config)
+        cmd_backtest_nowcast(config_with_date_filter(config, args.start_date, args.end_date))
     elif args.command == "build-nowcast-dataset":
-        cmd_build_nowcast_dataset(config)
+        cmd_build_nowcast_dataset(config_with_date_filter(config, args.start_date, args.end_date))
     elif args.command == "list-models":
         cmd_list_models()
     elif args.command == "torch-info":

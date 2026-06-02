@@ -75,6 +75,20 @@ def test_nowcast_dataset_uses_same_day_market_but_prior_factor_values() -> None:
     assert "SPY_close" not in dataset.feature_columns
 
 
+def test_nowcast_dataset_filters_unreleased_dates() -> None:
+    cfg = _config()
+    cfg["date_filter"] = {"start_date": "2024-01-06", "end_date": "2024-01-06"}
+    ff5 = _ff5()
+    market = _market()
+    market.loc[pd.Timestamp("2024-01-06")] = market.iloc[-1]
+
+    dataset = build_nowcast_dataset(ff5, market.sort_index(), cfg)
+
+    assert list(dataset.unreleased_dates) == [pd.Timestamp("2024-01-06")]
+    assert dataset.metadata["n_all_unreleased_dates"] == 2
+    assert dataset.metadata["n_unreleased_dates"] == 1
+
+
 def test_sparse_market_rows_do_not_poison_later_nowcast_features() -> None:
     ff5 = _ff5()
     market = _market()

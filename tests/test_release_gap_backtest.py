@@ -86,3 +86,17 @@ def test_release_gap_backtest_parallel_cutoffs(tmp_path) -> None:
     assert not result.predictions.empty
     metadata = (result.run_dir / "metadata" / "backtest_metadata.json").read_text()
     assert '"backtest_n_jobs": 2' in metadata
+
+
+def test_release_gap_backtest_filters_target_dates(tmp_path) -> None:
+    config = _config(tmp_path)
+    config["nowcast"]["run_name"] = "gap_date_filter_test"
+    config["date_filter"] = {"start_date": "2024-01-08", "end_date": "2024-01-08"}
+    ff5, market = _frames()
+    result = run_release_gap_backtest_from_frames(ff5, market, config)
+
+    assert not result.predictions.empty
+    assert set(pd.to_datetime(result.predictions["target_date"])) == {pd.Timestamp("2024-01-08")}
+    assert set(result.predictions["gap_day"]) == {2}
+    metadata = (result.run_dir / "metadata" / "backtest_metadata.json").read_text()
+    assert '"start_date": "2024-01-08"' in metadata

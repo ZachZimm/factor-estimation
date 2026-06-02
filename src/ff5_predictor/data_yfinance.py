@@ -30,8 +30,29 @@ def load_market_data(config: dict[str, Any]) -> pd.DataFrame:
 
     if cache_path.exists() and not bool(config["data"].get("force_refresh", False)):
         df, _ = read_parquet_with_metadata(cache_path)
-        return normalize_datetime_index(df)
+        cached = normalize_datetime_index(df)
+        if _cache_satisfies_requested_dates(cached, config):
+            return cached
+        LOGGER.info(
+            "Cached yfinance data ends at %s but requested prediction dates extend through %s; refreshing market data",
+            cached.index.max().date() if not cached.empty else None,
+            _requested_market_end(config).date() if _requested_market_end(config) is not None else None,
+        )
+        try:
+            return _fetch_and_cache_market_data(tickers, start, end, cache_path)
+        except Exception as exc:
+            LOGGER.warning("Market data refresh failed; using cached yfinance data: %s", exc)
+            return cached
 
+    return _fetch_and_cache_market_data(tickers, start, end, cache_path)
+
+
+def _fetch_and_cache_market_data(
+    tickers: list[str],
+    start: str,
+    end: str | None,
+    cache_path,
+) -> pd.DataFrame:
     df = fetch_yfinance_data(tickers, start=start, end=end, auto_adjust=True)
     metadata = {
         "source": "yfinance",
@@ -48,6 +69,21 @@ def load_market_data(config: dict[str, Any]) -> pd.DataFrame:
     }
     write_parquet_with_metadata(df, cache_path, metadata)
     return df
+
+
+def _cache_satisfies_requested_dates(df: pd.DataFrame, config: dict[str, Any]) -> bool:
+    requested_end = _requested_market_end(config)
+    if requested_end is None:
+        return True
+    if df.empty:
+        return False
+    return pd.Timestamp(df.index.max()) >= requested_end
+
+
+def _requested_market_end(config: dict[str, Any]) -> pd.Timestamp | None:
+    date_filter = config.get("date_filter", {})
+    end = date_filter.get("end_date") or date_filter.get("start_date")
+    return pd.Timestamp(end) if end else None
 
 
 def fetch_yfinance_data(

@@ -78,8 +78,9 @@ def run_nowcast_engine(
     records: list[dict[str, Any]] = []
     snapshots: list[pd.DataFrame] = []
 
-    for gap_day, target_date in enumerate(target_dates, start=1):
+    for target_date in target_dates:
         target_date = pd.Timestamp(target_date)
+        gap_day = _gap_day_from_market_dates(market.index, spec.cutoff_date, target_date)
         for model_type in models:
             pred_values: np.ndarray | None = None
             model_metadata: dict[str, Any]
@@ -387,6 +388,17 @@ def _history_metadata(history: pd.DataFrame) -> dict[str, Any]:
         "train_start_date": str(pd.Timestamp(history.index.min()).date()),
         "train_end_date": str(pd.Timestamp(history.index.max()).date()),
     }
+
+
+def _gap_day_from_market_dates(
+    market_index: pd.DatetimeIndex,
+    cutoff_date: pd.Timestamp,
+    target_date: pd.Timestamp,
+) -> int:
+    dates = pd.DatetimeIndex(pd.to_datetime(market_index).tz_localize(None)).sort_values()
+    mask = (dates > pd.Timestamp(cutoff_date)) & (dates <= pd.Timestamp(target_date))
+    gap_day = int(mask.sum())
+    return gap_day if gap_day > 0 else 1
 
 
 def _release_gap_sizes(spec: NowcastTargetSpec, target_date: pd.Timestamp) -> list[int] | None:
