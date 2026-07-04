@@ -5,8 +5,8 @@ task:
 nowcast:
   run_name: "market_only_diagnostic_v1"
   models:
-    - "ridge"
-  primary_model: "ridge"
+    - "elasticnet"
+  primary_model: "elasticnet"
   estimate_unreleased_only: true
   save_feature_snapshot: true
   save_model_artifact: false

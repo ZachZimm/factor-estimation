@@ -3,10 +3,10 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import pytest
-from sklearn.linear_model import Ridge
+from sklearn.linear_model import MultiTaskElasticNet, Ridge
 from sklearn.preprocessing import StandardScaler
 
-from ff5_predictor.attribution import explain_ridge_predictions, infer_feature_group
+from ff5_predictor.attribution import explain_linear_predictions, explain_ridge_predictions, infer_feature_group
 from ff5_predictor.nowcast_models import FittedNowcastModel
 
 
@@ -62,6 +62,33 @@ def test_ridge_attribution_reconstructs_predictions_and_sorts_top_features() -> 
     assert not result.contribution_wide.empty
 
 
+def test_elasticnet_attribution_reconstructs_predictions() -> None:
+    fitted, features, _ = _fitted()
+    targets = pd.DataFrame(
+        {
+            "Mkt-RF": [0.01, -0.01, 0.02],
+            "SMB": [0.001, 0.002, -0.001],
+        },
+        index=features.index,
+    )
+    scaler = StandardScaler().fit(features)
+    model = MultiTaskElasticNet(alpha=0.0001, l1_ratio=0.05, max_iter=10000).fit(scaler.transform(features), targets)
+    fitted.model_type = "elasticnet"
+    fitted.model = model
+    fitted.scaler = scaler
+    fitted.metadata["alpha"] = 0.0001
+    predictions = pd.DataFrame({"date": features.index.date.astype(str)})
+    predicted = fitted.predict_frame(features)
+    for idx, target in enumerate(fitted.target_columns):
+        predictions[f"pred_{target}"] = predicted[:, idx]
+
+    result = explain_linear_predictions(fitted, features, predictions, top_n=2)
+
+    assert result.metadata["model_type"] == "elasticnet"
+    assert len(result.coefficient_table) == len(fitted.feature_columns) * len(fitted.target_columns)
+    assert not result.top_contributions.empty
+
+
 def test_feature_group_inference() -> None:
     assert infer_feature_group("proxy_size_ijr_spy") == "proxy_size"
     assert infer_feature_group("proxy_value_iwn_iwo") == "proxy_value"
@@ -71,10 +98,10 @@ def test_feature_group_inference() -> None:
 
 def test_attribution_rejects_unsupported_model_type() -> None:
     fitted, features, predictions = _fitted()
-    fitted.model_type = "elasticnet"
+    fitted.model_type = "tft"
 
-    with pytest.raises(ValueError, match="Ridge attribution"):
-        explain_ridge_predictions(fitted, features, predictions, top_n=2)
+    with pytest.raises(ValueError, match="Linear attribution"):
+        explain_linear_predictions(fitted, features, predictions, top_n=2)
 
 
 def test_attribution_detects_reconstruction_errors() -> None:

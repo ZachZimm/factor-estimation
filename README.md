@@ -1,10 +1,14 @@
-# FF5 Predictor
+# FF5 Nowcaster
 
-Nowcast-oriented nowcaster for daily Fama-French 5-factor values using market data.
+This repository estimates daily official Fama-French 5-factor values for dates where market data is available but the Kenneth French daily FF5 file has not yet been released.
 
-The primary workflow estimates official FF5 values for recent dates where same-day market data exists but Kenneth French has not yet released the official factors. For nowcast date `t`, market-derived features may use complete after-close market data through `t`.
+The intended workflow is an after-close nowcast:
 
-The active nowcast profile is a market-only all-candidates Ridge model. Historical official FF5 values are used as supervised labels during training, but FF5/RF lag values are not used as input features in the latest configs.
+```text
+estimate FF5(t) using same-day market data through t
+```
+
+Historical official FF5 values are used as supervised labels during training. They are not used as input lag features in the default configuration. The default estimator is a market-only all-candidates ElasticNet model, selected from the release-gap backtests in this repo.
 
 ## Install
 
@@ -14,169 +18,140 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-## Run Nowcast
+## Correct Way To Run
+
+Run the full current workflow:
+
+```bash
+./start.sh
+```
+
+This runs:
 
 ```bash
 python -m ff5_predictor.cli nowcast --config config/nowcast/latest.yaml
-```
-
-Useful commands:
-
-```bash
 python -m ff5_predictor.cli backtest-nowcast --config config/nowcast/backtest_release_gap.yaml
 python -m ff5_predictor.cli build-nowcast-dataset --config config/nowcast/diagnostic.yaml
 python -m ff5_predictor.cli list-models
 ```
 
-To restrict prediction output to a specific target date or date range, pass `--start-date` and/or `--end-date`. The historical training window is not truncated; only prediction/inference target dates are filtered.
+Use `start_nowcast.sh` if you want the same workflow without the final model-list print.
+
+## Main Outputs
+
+Latest unreleased-date estimates:
+
+```text
+data/nowcasts/latest/latest/predictions/latest_nowcast.csv
+```
+
+Latest model attribution:
+
+```text
+data/nowcasts/latest/latest/attribution/
+```
+
+Release-gap backtest outputs:
+
+```text
+data/nowcasts/market_only_elasticnet_backtest_v1/<timestamp>/predictions/release_gap_predictions.csv
+data/nowcasts/market_only_elasticnet_backtest_v1/<timestamp>/metrics/model_ranking.csv
+data/nowcasts/market_only_elasticnet_backtest_v1/<timestamp>/metrics/shared_date_metrics.json
+```
+
+Diagnostic train/inference datasets:
+
+```text
+data/nowcasts/market_only_diagnostic_v1/<timestamp>/datasets/
+```
+
+## Default Methodology
+
+The default config is:
+
+```text
+config/nowcast/latest.yaml
+```
+
+It uses:
+
+- model: `elasticnet`
+- training window: 2520 aligned rows, roughly 10 years
+- inputs: same-day market/ETF OHLC-derived returns, rolling features, and proxy spreads
+- labels: official FF5 values in decimal return units
+- excluded inputs: FF5/RF lag features and recursive factor lags
+- attribution: linear feature contribution artifacts for the ElasticNet model
+
+The release-gap backtest config is:
+
+```text
+config/nowcast/backtest_release_gap.yaml
+```
+
+It simulates official-data release gaps by hiding future official FF5 rows after each cutoff, fitting only on rows available at the cutoff, and predicting hidden dates with same-day market data.
+
+## Date Ranges
+
+To estimate a specific currently unreleased date or date range:
 
 ```bash
 python -m ff5_predictor.cli nowcast \
   --config config/nowcast/latest.yaml \
-  --start-date 2026-05-29 \
-  --end-date 2026-05-29
+  --start-date 2026-07-01 \
+  --end-date 2026-07-01
+```
 
+To generate a historical release-gap prediction series:
+
+```bash
 python -m ff5_predictor.cli backtest-nowcast \
   --config config/nowcast/backtest_release_gap.yaml \
-  --start-date 2025-01-01 \
-  --end-date 2025-01-31
+  --start-date 2020-01-01 \
+  --end-date 2026-03-31
 ```
 
-The full active workflow is also available as:
+The historical training window is not truncated by these flags. They filter prediction target dates only.
 
-```bash
-./start_nowcast.sh
-```
+## Data Policy
 
-Nowcast outputs are written under `data/nowcasts/<run_name>/<timestamp>/`. The latest config also updates `data/nowcasts/latest/latest/` as a convenience copy.
+Fama-French data is loaded from `getFamaFrenchFactors` when practical, otherwise from the official Kenneth French remote zip. Existing repository-local FF5 CSV or zip files are ignored.
 
-Historical experiment outputs under `data/experiments`, `data/predictions`, and `data/processed` are not deleted or rewritten by the nowcast workflow.
+Market data is downloaded from `yfinance` with `auto_adjust=True` and cached as Parquet. If a requested nowcast date is beyond cached market coverage, the loader attempts a fresh yfinance download before deciding no prediction is possible.
 
-Ridge nowcasts also write attribution artifacts under:
-
-```text
-data/nowcasts/latest/<timestamp>/attribution/
-```
-
-These include coefficient tables, per-feature contribution tables, top contribution summaries, and feature-group contribution summaries.
-
-## Feature Extraction Experiments
-
-Leakage-safe feature extraction backtests are available for group-wise PCA, PLS, per-target PLS, clustered feature averages, and TFT with compressed group-wise PCA inputs:
-
-```bash
-./start_feature_extraction.sh
-```
-
-Additional clustered and hybrid Ridge experiments can be run with:
-
-```bash
-./start_clustered_hybrid_experiments.sh
-```
-
-The market-only ElasticNet comparison using the same setup as the strongest Ridge backtest can be run with:
-
-```bash
-./start_elasticnet_experiment.sh
-```
-
-The refined ElasticNet grid around the first winning region can be run with:
-
-```bash
-./start_elasticnet_refined_experiment.sh
-```
-
-The per-factor ElasticNet experiment trains one independent ElasticNet per FF5 factor and uses parallel release-gap cutoffs:
-
-```bash
-./start_per_factor_elasticnet_experiment.sh
-```
-
-Individual configs live under:
-
-```text
-config/nowcast/extraction_group_pca.yaml
-config/nowcast/extraction_pls.yaml
-config/nowcast/extraction_per_target_pls.yaml
-config/nowcast/extraction_clustered.yaml
-config/nowcast/extraction_tft_group_pca.yaml
-config/nowcast/extraction_clustered_095.yaml
-config/nowcast/extraction_clustered_098.yaml
-config/nowcast/extraction_clustered_hybrid_098.yaml
-config/nowcast/extraction_group_pca_hybrid.yaml
-config/nowcast/elasticnet_market_only.yaml
-config/nowcast/elasticnet_market_only_refined.yaml
-config/nowcast/per_factor_elasticnet_market_only.yaml
-```
-
-Each extractor is fit inside the cutoff-specific training frame during release-gap backtests, then applied to later target-date rows. Extractors are not fit on hidden official values or target-date inference rows.
-
-The current model registry includes:
-
-- `rolling_mean`
-- `ewma`
-- `ridge`
-- `per_target_pls_ridge`
-- `elasticnet`
-- `per_factor_elasticnet`
-- `tft`
+All factor values are stored internally as decimal returns.
 
 ## Factor Viewer
 
-Generate a standalone browser-based FF5 data viewer:
+Generate a standalone browser-based FF5 viewer:
 
 ```bash
 python -m ff5_predictor.cli view-factors --config config/default.yaml --open-browser
 ```
 
-The viewer includes date filters, factor toggles, summary statistics, hover values, and CSV export. Start and end dates can be set when generating the file:
-
-```bash
-python -m ff5_predictor.cli view-factors \
-  --config config/default.yaml \
-  --start-date 2010-01-01 \
-  --end-date 2025-12-31 \
-  --viewer-output data/processed/ff5_factor_viewer.html
-```
-
-To compare model run outputs against official FF5 factors, pass a predictions CSV or a nowcast run directory. The viewer adds a series mode switch (`Official`, `Predicted`, `Both`, `Error`) plus model and gap-day filters for backtest files:
+Overlay a nowcast/backtest run:
 
 ```bash
 python -m ff5_predictor.cli view-factors \
   --config config/nowcast/backtest_release_gap.yaml \
-  --run-dir data/nowcasts/<run_name>/latest \
-  --model-type ridge \
+  --run-dir data/nowcasts/market_only_elasticnet_backtest_v1/latest \
+  --model-type elasticnet \
   --gap-day 1 \
   --open-browser
 ```
 
-You can also point directly at a predictions file:
+## Research Appendix
 
-```bash
-python -m ff5_predictor.cli view-factors \
-  --config config/default.yaml \
-  --predictions-csv data/nowcasts/<run_name>/latest/predictions/release_gap_predictions.csv \
-  --model-type ridge
+Exploratory configs and runner scripts are retained for reproducibility, but they are not the recommended workflow:
+
+```text
+config/research/
+scripts/research/
 ```
 
-## Data
-
-Fama-French data is loaded from `getFamaFrenchFactors` when practical, otherwise from the official Kenneth French remote zip. Existing repository-local FF5 CSV or zip files are ignored. Factor values are stored internally as decimal returns, so a Kenneth French value of `1.25` becomes `0.0125`.
-
-Market data is downloaded with `yfinance` using `auto_adjust=True`.
-
-Downloaded and cleaned data is cached as Parquet with JSON metadata sidecars under `data/cache`.
-
-## Outputs
-
-- `data/nowcasts/<run_name>/<timestamp>/predictions/latest_nowcast.csv`
-- `data/nowcasts/<run_name>/<timestamp>/attribution/*.csv`
-- `data/nowcasts/<run_name>/<timestamp>/metrics/*.json`
-- `data/nowcasts/<run_name>/<timestamp>/predictions/release_gap_predictions.csv`
-- `data/nowcasts/<run_name>/<timestamp>/metrics/model_ranking.csv`
+These include feature extraction, clustered Ridge, refined ElasticNet, per-factor ElasticNet, size/value universe variants, and TFT experiments.
 
 ## Tests
 
 ```bash
-pytest
+.venv/bin/python -m pytest
 ```

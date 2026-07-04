@@ -124,6 +124,10 @@ def run_nowcast_engine(
                     continue
                 pred_values = fitted.predict_frame(row)[0]
                 model_metadata = fitted.metadata
+                snapshot = fitted.model_feature_frame(row)
+                snapshot["date"] = target_date.date().isoformat()
+                snapshot["model_type"] = model_type
+                snapshots.append(snapshot)
             elif model_type == "per_factor_elasticnet":
                 fitted = fitted_models.get("per_factor_elasticnet")
                 if fitted is None:

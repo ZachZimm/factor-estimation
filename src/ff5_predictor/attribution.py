@@ -9,6 +9,9 @@ import pandas as pd
 from ff5_predictor.nowcast_models import FittedNowcastModel
 
 
+SUPPORTED_LINEAR_ATTRIBUTION_MODELS = {"ridge", "elasticnet"}
+
+
 @dataclass(frozen=True)
 class AttributionResult:
     contribution_long: pd.DataFrame
@@ -19,7 +22,7 @@ class AttributionResult:
     metadata: dict[str, Any]
 
 
-def explain_ridge_predictions(
+def explain_linear_predictions(
     fitted: FittedNowcastModel,
     feature_frame: pd.DataFrame,
     prediction_frame: pd.DataFrame,
@@ -27,10 +30,11 @@ def explain_ridge_predictions(
     top_n: int,
     feature_groups: dict[str, list[str]] | None = None,
 ) -> AttributionResult:
-    if fitted.model_type != "ridge":
-        raise ValueError("Ridge attribution only supports fitted model_type='ridge'")
+    if fitted.model_type not in SUPPORTED_LINEAR_ATTRIBUTION_MODELS:
+        supported = ", ".join(sorted(SUPPORTED_LINEAR_ATTRIBUTION_MODELS))
+        raise ValueError(f"Linear attribution only supports fitted model_type in {{{supported}}}")
     if not hasattr(fitted.model, "coef_") or not hasattr(fitted.model, "intercept_"):
-        raise ValueError("Fitted model does not expose Ridge coefficients and intercepts")
+        raise ValueError("Fitted model does not expose linear coefficients and intercepts")
 
     top_n = max(int(top_n), 0)
     coefficients = np.asarray(fitted.model.coef_, dtype=float)
@@ -95,7 +99,7 @@ def explain_ridge_predictions(
         max_error = float(np.max(np.abs(reconstructed - predicted)))
         if max_error > 1e-8:
             raise ValueError(
-                f"Ridge attribution reconstruction failed for {target}: "
+                f"Linear attribution reconstruction failed for {target}: "
                 f"max abs error {max_error:.3e}"
             )
 
@@ -176,6 +180,25 @@ def explain_ridge_predictions(
             "n_targets": len(fitted.target_columns),
             "reconstruction_tolerance": 1e-8,
         },
+    )
+
+
+def explain_ridge_predictions(
+    fitted: FittedNowcastModel,
+    feature_frame: pd.DataFrame,
+    prediction_frame: pd.DataFrame,
+    *,
+    top_n: int,
+    feature_groups: dict[str, list[str]] | None = None,
+) -> AttributionResult:
+    if fitted.model_type != "ridge":
+        raise ValueError("Ridge attribution only supports fitted model_type='ridge'")
+    return explain_linear_predictions(
+        fitted,
+        feature_frame,
+        prediction_frame,
+        top_n=top_n,
+        feature_groups=feature_groups,
     )
 
 

@@ -90,8 +90,8 @@ nowcast:
   output_dir: "data/nowcasts"
   run_name: "latest"
   models:
-    - "ridge"
-  primary_model: "ridge"
+    - "elasticnet"
+  primary_model: "elasticnet"
   estimate_unreleased_only: true
   save_feature_snapshot: true
   save_model_artifact: true
@@ -112,7 +112,7 @@ feature_extraction:
   enabled: false
   method: "none"
   apply_to_models:
-    - "ridge"
+    - "elasticnet"
   output_prefix: "fx"
   save_transformer_artifact: false
   keep_original_features: false

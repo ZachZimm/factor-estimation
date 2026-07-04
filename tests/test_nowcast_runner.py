@@ -72,6 +72,30 @@ def test_latest_nowcast_writes_predictions_and_model_artifact(tmp_path) -> None:
     assert not (tmp_path / "test_nowcast").joinpath("latest").exists()
 
 
+def test_latest_nowcast_writes_elasticnet_attributions(tmp_path) -> None:
+    cfg = _config(tmp_path)
+    cfg["nowcast"]["models"] = ["elasticnet"]
+    cfg["nowcast"]["primary_model"] = "elasticnet"
+    cfg["nowcast"]["save_feature_attributions"] = True
+    cfg["models"]["elasticnet"] = {
+        "alpha": 0.001,
+        "l1_ratio": 0.05,
+        "max_iter": 10000,
+        "tol": 0.0001,
+        "tune_alpha": False,
+        "scale_features": True,
+    }
+
+    result = run_latest_nowcast_from_frames(_ff5(7), _market(8), cfg)
+
+    assert not result.predictions.empty
+    assert (result.run_dir / "models" / "elasticnet.joblib").exists()
+    assert (result.run_dir / "attribution" / "elasticnet_coefficients.csv").exists()
+    assert (result.run_dir / "attribution" / "elasticnet_top_contributions.csv").exists()
+    assert result.metadata["attribution"]["enabled"] is True
+    assert result.metadata["attribution"]["model_type"] == "elasticnet"
+
+
 def test_latest_nowcast_writes_empty_when_no_unreleased_dates(tmp_path) -> None:
     result = run_latest_nowcast_from_frames(_ff5(6), _market(6), _config(tmp_path))
 

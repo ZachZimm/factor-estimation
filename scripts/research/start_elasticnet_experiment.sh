@@ -7,6 +7,6 @@ if [[ -x ".venv/bin/python" ]]; then
 fi
 
 echo "Running market-only ElasticNet backtest with Ridge comparison..."
-"${PYTHON_BIN}" -m ff5_predictor.cli backtest-nowcast --config config/nowcast/elasticnet_market_only.yaml
+"${PYTHON_BIN}" -m ff5_predictor.cli backtest-nowcast --config config/research/elasticnet_market_only.yaml
 
 echo "ElasticNet experiment complete."

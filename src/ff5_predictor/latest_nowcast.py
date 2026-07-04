@@ -6,7 +6,7 @@ from typing import Any
 
 import pandas as pd
 
-from ff5_predictor.attribution import explain_ridge_predictions
+from ff5_predictor.attribution import SUPPORTED_LINEAR_ATTRIBUTION_MODELS, explain_linear_predictions
 from ff5_predictor.availability import unreleased_market_dates
 from ff5_predictor.data_famafrench import load_ff5
 from ff5_predictor.data_yfinance import load_market_data
@@ -80,9 +80,10 @@ def run_latest_nowcast_from_frames(
         predictions = empty_nowcast_predictions(dataset.target_columns)
     feature_snapshot = engine_result.feature_snapshots
 
-    ridge_model = engine_result.fitted_models.get("ridge")
-    if isinstance(ridge_model, FittedNowcastModel) and bool(config.get("nowcast", {}).get("save_model_artifact", True)):
-        save_primary_model_artifact(ridge_model, run_dir)
+    primary_model_name = str(config.get("nowcast", {}).get("primary_model", "ridge"))
+    primary_model = engine_result.fitted_models.get(primary_model_name)
+    if isinstance(primary_model, FittedNowcastModel) and bool(config.get("nowcast", {}).get("save_model_artifact", True)):
+        save_primary_model_artifact(primary_model, run_dir)
 
     write_nowcast_predictions(run_dir, "latest_nowcast.csv", predictions)
     write_json(run_dir / "predictions" / "latest_nowcast.json", {"records": predictions.to_dict(orient="records")})
@@ -91,8 +92,12 @@ def run_latest_nowcast_from_frames(
         feature_snapshot.to_parquet(run_dir / "features" / "latest_feature_snapshot.parquet")
 
     attribution_metadata: dict[str, Any] = {"enabled": False}
-    if isinstance(ridge_model, FittedNowcastModel) and bool(config.get("nowcast", {}).get("save_feature_attributions", False)):
-        attribution_metadata = save_ridge_attributions(ridge_model, feature_snapshot, predictions, config, run_dir)
+    if (
+        isinstance(primary_model, FittedNowcastModel)
+        and primary_model.model_type in SUPPORTED_LINEAR_ATTRIBUTION_MODELS
+        and bool(config.get("nowcast", {}).get("save_feature_attributions", False))
+    ):
+        attribution_metadata = save_linear_attributions(primary_model, feature_snapshot, predictions, config, run_dir)
 
     metadata = {
         **dataset.metadata,
@@ -119,7 +124,7 @@ def run_latest_nowcast_from_frames(
     )
 
 
-def save_ridge_attributions(
+def save_linear_attributions(
     fitted: FittedNowcastModel,
     feature_snapshot: pd.DataFrame,
     predictions: pd.DataFrame,
@@ -127,14 +132,15 @@ def save_ridge_attributions(
     run_dir: Path,
 ) -> dict[str, Any]:
     top_n = int(config.get("attribution", {}).get("top_n", 20))
-    result = explain_ridge_predictions(fitted, feature_snapshot, predictions, top_n=top_n)
+    result = explain_linear_predictions(fitted, feature_snapshot, predictions, top_n=top_n)
     attribution_dir = ensure_dir(run_dir / "attribution")
+    prefix = fitted.model_type
     paths = {
-        "coefficients": attribution_dir / "ridge_coefficients.csv",
-        "contributions_long": attribution_dir / "ridge_contributions_long.parquet",
-        "contributions_wide": attribution_dir / "ridge_contributions_wide.parquet",
-        "top_contributions": attribution_dir / "ridge_top_contributions.csv",
-        "group_contributions": attribution_dir / "ridge_group_contributions.csv",
+        "coefficients": attribution_dir / f"{prefix}_coefficients.csv",
+        "contributions_long": attribution_dir / f"{prefix}_contributions_long.parquet",
+        "contributions_wide": attribution_dir / f"{prefix}_contributions_wide.parquet",
+        "top_contributions": attribution_dir / f"{prefix}_top_contributions.csv",
+        "group_contributions": attribution_dir / f"{prefix}_group_contributions.csv",
         "metadata": attribution_dir / "attribution_metadata.json",
     }
     result.coefficient_table.to_csv(paths["coefficients"], index=False)

@@ -7,6 +7,6 @@ if [[ -x ".venv/bin/python" ]]; then
 fi
 
 echo "Running market-only per-factor ElasticNet backtest with parallel cutoffs..."
-"${PYTHON_BIN}" -m ff5_predictor.cli backtest-nowcast --config config/nowcast/per_factor_elasticnet_market_only.yaml
+"${PYTHON_BIN}" -m ff5_predictor.cli backtest-nowcast --config config/research/per_factor_elasticnet_market_only.yaml
 
 echo "Per-factor ElasticNet experiment complete."

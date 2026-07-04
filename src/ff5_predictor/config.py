@@ -99,8 +99,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "nowcast": {
         "output_dir": "data/nowcasts",
         "run_name": "latest",
-        "models": ["ridge"],
-        "primary_model": "ridge",
+        "models": ["elasticnet"],
+        "primary_model": "elasticnet",
         "estimate_unreleased_only": True,
         "save_feature_snapshot": True,
         "save_model_artifact": True,
@@ -120,7 +120,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "feature_extraction": {
         "enabled": False,
         "method": "none",
-        "apply_to_models": ["ridge"],
+        "apply_to_models": ["elasticnet"],
         "output_prefix": "fx",
         "save_transformer_artifact": False,
         "keep_original_features": False,

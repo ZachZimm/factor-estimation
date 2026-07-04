@@ -17,7 +17,17 @@ def test_nowcast_config_is_market_only_all_candidates() -> None:
     assert cfg["target_features"]["include_lagged_targets"] is False
     assert cfg["target_features"]["include_rf_lags"] is False
     assert cfg["availability"]["recursive_factor_lags"] is False
+    assert cfg["nowcast"]["models"] == ["elasticnet"]
+    assert cfg["nowcast"]["primary_model"] == "elasticnet"
     assert cfg["nowcast"]["save_feature_attributions"] is True
+
+
+def test_backtest_config_uses_default_elasticnet_with_baselines() -> None:
+    cfg = load_config("config/nowcast/backtest_release_gap.yaml")
+
+    assert cfg["nowcast"]["primary_model"] == "elasticnet"
+    assert cfg["nowcast"]["models"] == ["rolling_mean", "ewma", "ridge", "elasticnet"]
+    assert cfg["nowcast"]["run_name"] == "market_only_elasticnet_backtest_v1"
 
 
 def test_nowcast_dataset_has_no_ff5_input_features() -> None:
