@@ -2,6 +2,15 @@ task:
   mode: "nowcast"
   estimate_unreleased_only: true
 
+prediction:
+  target_columns:
+    - "Mkt-RF"
+    - "SMB"
+    - "HML"
+    - "RMW"
+    - "CMA"
+    - "Mom"
+
 nowcast:
   run_name: "latest"
   models:

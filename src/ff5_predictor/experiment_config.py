@@ -7,10 +7,11 @@ VISIBLE_MODELS = [
     "ridge",
     "per_target_pls_ridge",
     "elasticnet",
+    "elasticnet_mom_override",
     "per_factor_elasticnet",
     "tft",
 ]
 
 AVAILABLE_MODELS = VISIBLE_MODELS
 TORCH_MODEL_NAMES = {"tft", "torch_tft"}
-TABULAR_MODEL_NAMES = {"ridge", "per_target_pls_ridge", "elasticnet", "per_factor_elasticnet"}
+TABULAR_MODEL_NAMES = {"ridge", "per_target_pls_ridge", "elasticnet", "elasticnet_mom_override", "per_factor_elasticnet"}

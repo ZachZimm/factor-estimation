@@ -9,6 +9,7 @@ import pandas as pd
 from ff5_predictor.features import build_market_features
 from ff5_predictor.fundamentals import build_fundamentals_features
 from ff5_predictor.io import normalize_datetime_index
+from ff5_predictor.momentum_features import build_momentum_features
 from ff5_predictor.proxy_features import build_proxy_features
 
 
@@ -38,6 +39,7 @@ def build_nowcast_features(
         market_features = market_features.shift(market_lag)
 
     proxy_features = build_proxy_features(market_features, config)
+    momentum_features = build_momentum_features(market, config)
     factor_features = _build_factor_features_for_nowcast(
         ff5,
         pd.DatetimeIndex(market_features.index),
@@ -47,7 +49,7 @@ def build_nowcast_features(
     )
     fundamentals = build_fundamentals_features(config, pd.DatetimeIndex(market_features.index))
 
-    frames = [market_features, proxy_features, factor_features, fundamentals.features]
+    frames = [market_features, proxy_features, momentum_features, factor_features, fundamentals.features]
     non_empty_frames = [frame for frame in frames if not frame.empty]
     if non_empty_frames:
         features = pd.concat(non_empty_frames, axis=1)
@@ -64,6 +66,7 @@ def build_nowcast_features(
         feature_columns=list(features.columns),
         market_feature_columns=[col for col in market_cols if col in features.columns],
         proxy_feature_columns=[col for col in proxy_cols if col in features.columns],
+        # Momentum features are market-derived, but kept in metadata for diagnostics.
         factor_feature_columns=[col for col in factor_cols if col in features.columns],
         metadata={
             "market_data_lag_rows": market_lag,
@@ -71,6 +74,7 @@ def build_nowcast_features(
             "official_cutoff_date": None if official_cutoff_date is None else str(pd.Timestamp(official_cutoff_date).date()),
             "recursive_prediction_rows": 0 if recursive_predictions is None else int(len(recursive_predictions)),
             "dropped_sparse_market_rows": int(len(raw_market) - len(market)),
+            "momentum_feature_columns": int(sum(col.startswith(("mom_", "proxy_momentum_")) for col in features.columns)),
             "fundamentals": fundamentals.metadata,
         },
     )

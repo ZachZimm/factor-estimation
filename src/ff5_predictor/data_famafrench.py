@@ -24,7 +24,12 @@ KENNETH_FRENCH_FF5_DAILY_ZIP_URL = (
     "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/"
     "F-F_Research_Data_5_Factors_2x3_daily_CSV.zip"
 )
+KENNETH_FRENCH_MOM_DAILY_ZIP_URL = (
+    "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/"
+    "F-F_Momentum_Factor_daily_CSV.zip"
+)
 FF5_COLUMNS = ["Mkt-RF", "SMB", "HML", "RMW", "CMA", "RF"]
+MOM_COLUMN = "Mom"
 
 
 def load_ff5(config: dict[str, Any]) -> pd.DataFrame:
@@ -34,13 +39,17 @@ def load_ff5(config: dict[str, Any]) -> pd.DataFrame:
 
     if cache_path.exists() and not force_refresh:
         df, _ = read_parquet_with_metadata(cache_path)
-        return _filter_dates(normalize_datetime_index(df), config)
+        cached = normalize_datetime_index(df)
+        missing = _missing_configured_columns(cached, config)
+        if not missing:
+            return _filter_dates(cached, config)
+        LOGGER.info("Cached FF data missing configured columns %s; refreshing official factors", missing)
 
     df = fetch_ff5_daily(config)
     df = _filter_dates(df, config)
     metadata = {
         "source": "getFamaFrenchFactors_or_kenneth_french_remote_zip",
-        "dataset": "F-F_Research_Data_5_Factors_2x3_daily",
+        "dataset": "F-F_Research_Data_5_Factors_2x3_daily_plus_momentum_daily",
         "download_timestamp_utc": utc_now_iso(),
         "start_date": config["data"].get("start_date"),
         "end_date": config["data"].get("end_date"),
@@ -60,7 +69,13 @@ def fetch_ff5_daily(config: dict[str, Any]) -> pd.DataFrame:
     wrapper_df = _try_get_fama_french_factors()
     if wrapper_df is not None:
         LOGGER.info("Loaded FF5 daily data using getFamaFrenchFactors")
-        return wrapper_df
+        try:
+            return _join_momentum(wrapper_df, _download_momentum_daily(config))
+        except Exception as exc:
+            if MOM_COLUMN in config.get("prediction", {}).get("target_columns", []):
+                raise
+            LOGGER.debug("Could not add daily momentum to wrapper FF5 output: %s", exc)
+            return wrapper_df
 
     LOGGER.info("Downloading FF5 daily data from Kenneth French remote zip")
     response = requests.get(KENNETH_FRENCH_FF5_DAILY_ZIP_URL, timeout=60)
@@ -69,7 +84,9 @@ def fetch_ff5_daily(config: dict[str, Any]) -> pd.DataFrame:
     raw_dir = ensure_dir(config["data"].get("raw_dir", "data/raw"))
     raw_zip_path = raw_dir / "F-F_Research_Data_5_Factors_2x3_daily_CSV.zip"
     raw_zip_path.write_bytes(response.content)
-    return parse_kenneth_french_ff5_zip(response.content)
+    ff5 = parse_kenneth_french_ff5_zip(response.content)
+    mom = _download_momentum_daily(config)
+    return _join_momentum(ff5, mom)
 
 
 def parse_kenneth_french_ff5_zip(zip_bytes: bytes) -> pd.DataFrame:
@@ -114,6 +131,57 @@ def parse_kenneth_french_ff5_zip(zip_bytes: bytes) -> pd.DataFrame:
     df = df / 100.0
     df = normalize_datetime_index(df)
     return df.dropna(subset=FF5_COLUMNS)
+
+
+def parse_kenneth_french_momentum_zip(zip_bytes: bytes) -> pd.DataFrame:
+    """Parse a freshly supplied Kenneth French daily momentum zip payload."""
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        csv_names = [name for name in zf.namelist() if name.lower().endswith(".csv")]
+        if not csv_names:
+            raise ValueError("Kenneth French momentum zip did not contain a CSV file")
+        text = zf.read(csv_names[0]).decode("latin1")
+
+    lines = text.splitlines()
+    header_idx = next(
+        (i for i, line in enumerate(lines) if any(cell.strip() == MOM_COLUMN for cell in line.split(","))),
+        None,
+    )
+    if header_idx is None:
+        raise ValueError("Could not find Mom header row in Kenneth French momentum CSV")
+
+    data_lines = []
+    for line in lines[header_idx:]:
+        stripped = line.strip()
+        if not stripped:
+            break
+        first_cell = stripped.split(",", 1)[0].strip()
+        if line == lines[header_idx] or first_cell.isdigit():
+            data_lines.append(line)
+
+    df = pd.read_csv(io.StringIO("\n".join(data_lines)))
+    date_col = df.columns[0]
+    df = df.rename(columns={date_col: "date"})
+    df["date"] = pd.to_datetime(df["date"].astype(str), format="%Y%m%d")
+    df = df.set_index("date")
+    df = df[[MOM_COLUMN]].apply(pd.to_numeric, errors="coerce") / 100.0
+    df = normalize_datetime_index(df)
+    return df.dropna(subset=[MOM_COLUMN])
+
+
+def _download_momentum_daily(config: dict[str, Any]) -> pd.DataFrame:
+    LOGGER.info("Downloading daily momentum factor from Kenneth French remote zip")
+    response = requests.get(KENNETH_FRENCH_MOM_DAILY_ZIP_URL, timeout=60)
+    response.raise_for_status()
+    raw_dir = ensure_dir(config["data"].get("raw_dir", "data/raw"))
+    raw_zip_path = raw_dir / "F-F_Momentum_Factor_daily_CSV.zip"
+    raw_zip_path.write_bytes(response.content)
+    return parse_kenneth_french_momentum_zip(response.content)
+
+
+def _join_momentum(ff5: pd.DataFrame, mom: pd.DataFrame) -> pd.DataFrame:
+    joined = normalize_datetime_index(ff5).join(normalize_datetime_index(mom), how="inner")
+    columns = ["Mkt-RF", "SMB", "HML", "RMW", "CMA", MOM_COLUMN, "RF"]
+    return joined[columns].dropna(subset=columns)
 
 
 def _try_get_fama_french_factors() -> pd.DataFrame | None:
@@ -179,3 +247,10 @@ def _filter_dates(df: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame:
     if end:
         result = result.loc[: pd.Timestamp(end)]
     return result
+
+
+def _missing_configured_columns(df: pd.DataFrame, config: dict[str, Any]) -> list[str]:
+    required = list(config.get("prediction", {}).get("target_columns", []))
+    if config.get("prediction", {}).get("predict_rf", False) or "RF" in df.columns:
+        required.append("RF")
+    return [column for column in required if column not in df.columns]

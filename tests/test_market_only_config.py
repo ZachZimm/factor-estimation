@@ -6,7 +6,7 @@ from ff5_predictor.config import load_config
 from ff5_predictor.nowcast_dataset import build_nowcast_dataset
 
 
-TARGETS = ["Mkt-RF", "SMB", "HML", "RMW", "CMA"]
+TARGETS = ["Mkt-RF", "SMB", "HML", "RMW", "CMA", "Mom"]
 
 
 def test_nowcast_config_is_market_only_all_candidates() -> None:
@@ -57,7 +57,11 @@ def test_nowcast_dataset_has_no_ff5_input_features() -> None:
     market = pd.DataFrame(market_data, index=pd.date_range("2024-01-02", periods=9))
 
     dataset = build_nowcast_dataset(ff5, market, cfg)
-    forbidden = [col for col in dataset.feature_columns if col.startswith(("Mkt-RF_", "SMB_", "HML_", "RMW_", "CMA_", "RF_"))]
+    forbidden = [
+        col
+        for col in dataset.feature_columns
+        if col.startswith(("Mkt-RF_", "SMB_", "HML_", "RMW_", "CMA_", "Mom_", "RF_"))
+    ]
 
     assert not forbidden
     assert "proxy_size_ijr_spy" in dataset.feature_columns

@@ -74,6 +74,7 @@ prediction:
     - "HML"
     - "RMW"
     - "CMA"
+    - "Mom"
   include_rf_as_feature: false
   predict_rf: false
 
@@ -104,6 +105,12 @@ attribution:
   top_n: 20
 
 backtest:
+  n_jobs: 1
+  backend: "loky"
+  verbose: 0
+
+model_implied_series:
+  refit_step_rows: 21
   n_jobs: 1
   backend: "loky"
   verbose: 0
@@ -213,6 +220,16 @@ models:
     validation_window_rows: 252
     scale_features: true
 
+  elasticnet_mom_override:
+    alpha: 0.001
+    alpha_grid: [0.0003, 0.001, 0.003, 0.01]
+    l1_ratio: 0.05
+    max_iter: 50000
+    tol: 0.0001
+    tune_alpha: true
+    validation_window_rows: 252
+    scale_features: true
+
   per_factor_elasticnet:
     alpha: 0.001
     alpha_grid: [0.0003, 0.001, 0.003, 0.01]
@@ -239,6 +256,19 @@ proxy_features:
   include_relative_returns: true
   include_factor_mimic_spreads: true
   include_risk_proxies: true
+  rolling_windows: [5, 21, 63]
+
+momentum_features:
+  enabled: false
+  signals:
+    - {lookback_rows: 252, skip_rows: 21}
+    - {lookback_rows: 189, skip_rows: 21}
+    - {lookback_rows: 126, skip_rows: 21}
+  include_individual_signals: true
+  include_cross_sectional_proxy: true
+  top_quantile: 0.25
+  bottom_quantile: 0.25
+  min_assets: 8
   rolling_windows: [5, 21, 63]
 
 fundamentals:

@@ -69,6 +69,7 @@ def test_latest_nowcast_writes_predictions_and_model_artifact(tmp_path) -> None:
     assert {"pred_Mkt-RF", "factor_data_asof", "market_data_asof"}.issubset(result.predictions.columns)
     assert (result.run_dir / "models" / "ridge.joblib").exists()
     assert (result.run_dir / "predictions" / "latest_nowcast.csv").exists()
+    assert (result.run_dir / "predictions" / "official_plus_nowcast_series.csv").exists()
     assert not (tmp_path / "test_nowcast").joinpath("latest").exists()
 
 

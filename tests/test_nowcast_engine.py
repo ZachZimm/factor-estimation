@@ -7,6 +7,7 @@ from ff5_predictor.nowcast_features import build_nowcast_features
 
 
 TARGETS = ["Mkt-RF", "SMB", "HML", "RMW", "CMA"]
+TARGETS_WITH_MOM = ["Mkt-RF", "SMB", "HML", "RMW", "CMA", "Mom"]
 
 
 def _config() -> dict:
@@ -253,6 +254,40 @@ def test_engine_per_factor_elasticnet_smoke() -> None:
     predictions = select_backtest_columns(result.predictions, TARGETS)
     assert set(predictions["model_type"]) == {"per_factor_elasticnet"}
     assert "pred_Mkt-RF" in predictions.columns
+
+
+def test_engine_elasticnet_mom_override_smoke() -> None:
+    ff5, market = _frames()
+    ff5["Mom"] = [0.002 * (i + 1) for i in range(len(ff5))]
+    config = _config()
+    config["prediction"] = {"target_columns": TARGETS_WITH_MOM}
+    config["nowcast"] = {"models": ["elasticnet_mom_override"], "train_window_rows": 10, "min_train_rows": 3}
+    config["models"]["elasticnet"] = {
+        "alpha": 0.01,
+        "alpha_grid": [0.01],
+        "l1_ratio": 0.05,
+        "max_iter": 1000,
+        "tol": 0.001,
+        "tune_alpha": False,
+        "scale_features": True,
+    }
+    config["models"]["elasticnet_mom_override"] = dict(config["models"]["elasticnet"])
+    cutoff = pd.Timestamp("2024-01-06")
+    target_dates = pd.DatetimeIndex([pd.Timestamp("2024-01-07")])
+    feature_result = build_nowcast_features(ff5.loc[:cutoff], market.loc[:cutoff], config)
+    train_df = feature_result.features.join(ff5[TARGETS_WITH_MOM].loc[:cutoff]).dropna()
+    result = run_nowcast_engine(
+        ff5,
+        market,
+        train_df,
+        feature_result.feature_columns,
+        TARGETS_WITH_MOM,
+        NowcastTargetSpec(target_dates, cutoff, target_dates.max(), ff5.loc[target_dates, TARGETS_WITH_MOM], False),
+        config,
+    )
+    predictions = select_backtest_columns(result.predictions, TARGETS_WITH_MOM)
+    assert set(predictions["model_type"]) == {"elasticnet_mom_override"}
+    assert "pred_Mom" in predictions.columns
 
 
 def test_engine_tft_with_group_pca_smoke() -> None:

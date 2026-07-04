@@ -10,6 +10,7 @@ def test_active_configs_load() -> None:
         "config/nowcast/latest.yaml",
         "config/nowcast/backtest_release_gap.yaml",
         "config/nowcast/diagnostic.yaml",
+        "config/nowcast/model_implied_series.yaml",
     ]
     research = [
         "config/research/extraction_group_pca.yaml",
@@ -26,6 +27,7 @@ def test_active_configs_load() -> None:
         "config/research/per_factor_elasticnet_market_only.yaml",
         "config/research/backtest_size_value.yaml",
         "config/research/latest_size_value.yaml",
+        "config/research/momentum_enhanced_model_implied.yaml",
     ]
 
     for path in active + research:
@@ -41,6 +43,7 @@ def test_readme_command_paths_and_start_script_exist() -> None:
         "config/nowcast/latest.yaml",
         "config/nowcast/backtest_release_gap.yaml",
         "config/nowcast/diagnostic.yaml",
+        "config/nowcast/model_implied_series.yaml",
     ]:
         assert path in readme
         assert Path(path).exists()
@@ -48,8 +51,10 @@ def test_readme_command_paths_and_start_script_exist() -> None:
     assert "scripts/research/" in readme
     assert not any(Path("config/nowcast").glob("extraction_*.yaml"))
     assert Path("start_nowcast.sh").exists()
+    assert Path("start_model_implied_series.sh").exists()
     assert Path("scripts/research/start_feature_extraction.sh").exists()
     assert Path("scripts/research/start_clustered_hybrid_experiments.sh").exists()
     assert Path("scripts/research/start_elasticnet_experiment.sh").exists()
     assert Path("scripts/research/start_elasticnet_refined_experiment.sh").exists()
     assert Path("scripts/research/start_per_factor_elasticnet_experiment.sh").exists()
+    assert Path("scripts/research/start_momentum_enhanced_experiment.sh").exists()

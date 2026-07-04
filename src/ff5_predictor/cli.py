@@ -18,6 +18,7 @@ from ff5_predictor.factor_viewer import (
 from ff5_predictor.nowcast_dataset import build_nowcast_dataset
 from ff5_predictor.nowcast_io import create_nowcast_run_dir, write_json, write_nowcast_dataset, write_yaml
 from ff5_predictor.latest_nowcast import run_latest_nowcast
+from ff5_predictor.model_implied_series import run_model_implied_series
 from ff5_predictor.release_gap_backtest import run_release_gap_backtest
 
 LOGGER = logging.getLogger(__name__)
@@ -52,6 +53,11 @@ def cmd_nowcast(config: dict) -> None:
 def cmd_backtest_nowcast(config: dict) -> None:
     result = run_release_gap_backtest(config)
     LOGGER.info("Wrote nowcast backtest outputs to %s", result.run_dir)
+
+
+def cmd_model_implied_series(config: dict) -> None:
+    result = run_model_implied_series(config)
+    LOGGER.info("Wrote model-implied FF5 series outputs to %s", result.run_dir)
 
 
 def cmd_build_nowcast_dataset(config: dict) -> None:
@@ -131,6 +137,7 @@ def build_parser() -> argparse.ArgumentParser:
             "view-factors",
             "nowcast",
             "backtest-nowcast",
+            "model-implied-series",
             "build-nowcast-dataset",
         ],
     )
@@ -167,6 +174,8 @@ def main(argv: list[str] | None = None) -> None:
         cmd_nowcast(config_with_date_filter(config, args.start_date, args.end_date))
     elif args.command == "backtest-nowcast":
         cmd_backtest_nowcast(config_with_date_filter(config, args.start_date, args.end_date))
+    elif args.command == "model-implied-series":
+        cmd_model_implied_series(config_with_date_filter(config, args.start_date, args.end_date))
     elif args.command == "build-nowcast-dataset":
         cmd_build_nowcast_dataset(config_with_date_filter(config, args.start_date, args.end_date))
     elif args.command == "list-models":

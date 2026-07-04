@@ -87,6 +87,8 @@ def run_latest_nowcast_from_frames(
 
     write_nowcast_predictions(run_dir, "latest_nowcast.csv", predictions)
     write_json(run_dir / "predictions" / "latest_nowcast.json", {"records": predictions.to_dict(orient="records")})
+    combined_series = build_official_plus_nowcast_series(ff5_df, predictions, dataset.target_columns, primary_model_name)
+    write_nowcast_predictions(run_dir, "official_plus_nowcast_series.csv", combined_series)
     if bool(config.get("nowcast", {}).get("save_feature_snapshot", True)):
         ensure_dir(run_dir / "features")
         feature_snapshot.to_parquet(run_dir / "features" / "latest_feature_snapshot.parquet")
@@ -102,6 +104,7 @@ def run_latest_nowcast_from_frames(
     metadata = {
         **dataset.metadata,
         "n_prediction_rows": int(len(predictions)),
+        "n_official_plus_nowcast_rows": int(len(combined_series)),
         "models": config.get("nowcast", {}).get("models", []),
         "primary_model": config.get("nowcast", {}).get("primary_model"),
         "run_dir": str(run_dir),
@@ -122,6 +125,42 @@ def run_latest_nowcast_from_frames(
         metadata=metadata,
         run_dir=run_dir,
     )
+
+
+def build_official_plus_nowcast_series(
+    ff5_df: pd.DataFrame,
+    predictions: pd.DataFrame,
+    target_columns: list[str],
+    primary_model_name: str,
+) -> pd.DataFrame:
+    official = ff5_df[target_columns].copy()
+    official = official.reset_index().rename(columns={official.index.name or "index": "date"})
+    if "date" not in official.columns:
+        official = official.rename(columns={official.columns[0]: "date"})
+    official["date"] = pd.to_datetime(official["date"]).dt.date.astype(str)
+    official["source"] = "official"
+    official["model_type"] = None
+
+    if predictions.empty:
+        return official[["date", "source", "model_type", *target_columns]]
+
+    model_predictions = predictions.loc[predictions["model_type"] == primary_model_name].copy()
+    if model_predictions.empty:
+        model_predictions = predictions.copy()
+    nowcast = pd.DataFrame({"date": pd.to_datetime(model_predictions["date"]).dt.date.astype(str)})
+    for target in target_columns:
+        nowcast[target] = model_predictions[f"pred_{target}"].to_numpy(dtype=float)
+    nowcast["source"] = "nowcast"
+    nowcast["model_type"] = model_predictions["model_type"].to_numpy()
+
+    combined = pd.concat(
+        [official[["date", "source", "model_type", *target_columns]], nowcast[["date", "source", "model_type", *target_columns]]],
+        ignore_index=True,
+    )
+    combined["date"] = pd.to_datetime(combined["date"])
+    combined = combined.sort_values("date").drop_duplicates(subset=["date"], keep="last")
+    combined["date"] = combined["date"].dt.date.astype(str)
+    return combined.reset_index(drop=True)
 
 
 def save_linear_attributions(

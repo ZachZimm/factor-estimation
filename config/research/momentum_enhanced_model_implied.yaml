@@ -1,0 +1,119 @@
+task:
+  mode: "nowcast"
+  estimate_unreleased_only: false
+
+data:
+  tickers:
+    - "SPY"
+    - "VTI"
+    - "IWM"
+    - "QQQ"
+    - "IVE"
+    - "IVW"
+    - "VBR"
+    - "VBK"
+    - "IJS"
+    - "IJT"
+    - "XLF"
+    - "XLK"
+    - "XLI"
+    - "XLY"
+    - "XLP"
+    - "XLV"
+    - "XLE"
+    - "XLU"
+    - "TLT"
+    - "IEF"
+    - "SHY"
+    - "HYG"
+    - "LQD"
+    - "GLD"
+    - "UUP"
+    - "^VIX"
+    - "IWN"
+    - "IWO"
+    - "IWD"
+    - "IWF"
+    - "IJR"
+    - "IJH"
+    - "RSP"
+    - "SPHQ"
+    - "VNQ"
+    - "EFA"
+    - "EEM"
+    - "PDP"
+
+features:
+  lookback_windows: [1, 2, 5, 10, 21, 63, 126, 252]
+  include_returns: true
+  include_log_returns: true
+  include_rolling_volatility: true
+  include_rolling_volume_features: false
+  include_ohlc_features: true
+  include_drawdown: true
+  drop_raw_ohlcv: true
+
+prediction:
+  target_columns:
+    - "Mkt-RF"
+    - "SMB"
+    - "HML"
+    - "RMW"
+    - "CMA"
+    - "Mom"
+
+momentum_features:
+  enabled: true
+  signals:
+    - {lookback_rows: 252, skip_rows: 21}
+    - {lookback_rows: 189, skip_rows: 21}
+    - {lookback_rows: 126, skip_rows: 21}
+  include_individual_signals: true
+  include_cross_sectional_proxy: true
+  top_quantile: 0.25
+  bottom_quantile: 0.25
+  min_assets: 8
+  rolling_windows: [5, 21, 63]
+
+nowcast:
+  run_name: "momentum_enhanced_model_implied_v1"
+  models:
+    - "rolling_mean"
+    - "ewma"
+    - "elasticnet"
+    - "elasticnet_mom_override"
+  primary_model: "elasticnet_mom_override"
+  estimate_unreleased_only: false
+  save_feature_snapshot: false
+  save_model_artifact: false
+  save_feature_attributions: false
+  min_train_rows: 1000
+  train_window_rows: 2520
+  backtest_step_rows: 21
+
+model_implied_series:
+  refit_step_rows: 21
+  n_jobs: 4
+  backend: "loky"
+  verbose: 0
+
+models:
+  elasticnet:
+    alpha: 0.001
+    alpha_grid: [0.0003, 0.001, 0.003, 0.01]
+    l1_ratio: 0.05
+    max_iter: 50000
+    tol: 0.0001
+    tune_alpha: true
+    validation_window_rows: 252
+    scale_features: true
+
+  elasticnet_mom_override:
+    alpha: 0.001
+    alpha_grid: [0.0003, 0.001, 0.003, 0.01]
+    l1_ratio: 0.05
+    max_iter: 50000
+    tol: 0.0001
+    tune_alpha: true
+    validation_window_rows: 252
+    scale_features: true

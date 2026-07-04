@@ -9,7 +9,7 @@ import pandas as pd
 from ff5_predictor.io import ensure_dir
 
 
-VIEWER_COLUMNS = ["Mkt-RF", "SMB", "HML", "RMW", "CMA", "RF"]
+VIEWER_COLUMNS = ["Mkt-RF", "SMB", "HML", "RMW", "CMA", "Mom", "RF"]
 PREFERRED_RUN_PREDICTION_FILES = (
     "release_gap_predictions.csv",
     "latest_nowcast.csv",
@@ -165,7 +165,7 @@ def _viewer_payload(
     factors: list[str] | None = None,
     comparison: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    target_columns = factors or ["Mkt-RF", "SMB", "HML", "RMW", "CMA"]
+    target_columns = factors or ["Mkt-RF", "SMB", "HML", "RMW", "CMA", "Mom"]
     records: list[dict[str, Any]] = []
     for date, row in df.iterrows():
         item: dict[str, Any] = {"date": date.strftime("%Y-%m-%d")}
@@ -595,6 +595,7 @@ def _viewer_template() -> str:
       "HML": "#2f5f9f",
       "RMW": "#8b5b12",
       "CMA": "#6f4b8b",
+      "Mom": "#a23a76",
       "RF": "#59636d"
     };
     const state = { active: new Set(factorColumns), hoverIndex: null };

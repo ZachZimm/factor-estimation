@@ -80,6 +80,23 @@ class FittedPerFactorNowcastModel:
 
 
 @dataclass
+class FittedTargetOverrideNowcastModel:
+    model_type: str
+    base_model: FittedNowcastModel
+    override_by_target: dict[str, FittedNowcastModel]
+    feature_columns: list[str]
+    target_columns: list[str]
+    metadata: dict[str, Any]
+
+    def predict_frame(self, features: pd.DataFrame) -> np.ndarray:
+        values = self.base_model.predict_frame(features)[0].astype(float)
+        for target, fitted in self.override_by_target.items():
+            target_idx = self.target_columns.index(target)
+            values[target_idx] = float(fitted.predict_frame(features)[0])
+        return np.asarray([values], dtype=float)
+
+
+@dataclass
 class FittedTorchNowcastModel:
     model_type: str
     model: Any
@@ -372,6 +389,134 @@ def fit_per_factor_elasticnet_nowcast(
             "train_start_date": str(pd.Timestamp(train_df.index.min()).date()),
             "train_end_date": str(pd.Timestamp(train_df.index.max()).date()),
             "selected_by_target": selected,
+            "feature_extraction": {"enabled": False},
+            "n_raw_features": len(feature_columns),
+            "n_model_features": len(feature_columns),
+        },
+    )
+
+
+def fit_elasticnet_mom_override_nowcast(
+    train_df: pd.DataFrame,
+    feature_columns: list[str],
+    target_columns: list[str],
+    config: dict[str, Any],
+    base_model: FittedNowcastModel | None = None,
+) -> FittedTargetOverrideNowcastModel:
+    if "Mom" not in target_columns:
+        raise ValueError("elasticnet_mom_override requires 'Mom' in target_columns")
+    base = base_model or fit_elasticnet_nowcast(train_df, feature_columns, target_columns, config)
+    mom_cfg = deepcopy(config)
+    mom_cfg.setdefault("models", {})["elasticnet"] = {
+        **config.get("models", {}).get("elasticnet", {}),
+        **config.get("models", {}).get("elasticnet_mom_override", {}),
+    }
+    mom_train_df = train_df[feature_columns + ["Mom"]].copy()
+    mom_model = _fit_single_target_elasticnet_nowcast(mom_train_df, feature_columns, "Mom", mom_cfg)
+    metadata = {
+        **base.metadata,
+        "model_type": "elasticnet_mom_override",
+        "base_model_type": base.model_type,
+        "override_targets": ["Mom"],
+        "mom_override": mom_model.metadata,
+        "selected_by_target": {
+            "Mom": {
+                "alpha": mom_model.metadata.get("alpha"),
+                "l1_ratio": mom_model.metadata.get("l1_ratio"),
+                "converged": mom_model.metadata.get("converged"),
+            }
+        },
+    }
+    return FittedTargetOverrideNowcastModel(
+        model_type="elasticnet_mom_override",
+        base_model=base,
+        override_by_target={"Mom": mom_model},
+        feature_columns=feature_columns,
+        target_columns=target_columns,
+        metadata=metadata,
+    )
+
+
+def _fit_single_target_elasticnet_nowcast(
+    train_df: pd.DataFrame,
+    feature_columns: list[str],
+    target: str,
+    config: dict[str, Any],
+) -> FittedNowcastModel:
+    model_cfg = config.get("models", {}).get("elasticnet", {})
+    nowcast_cfg = config.get("nowcast", {})
+    train_window = int(nowcast_cfg.get("train_window_rows", 2520))
+    if train_window > 0:
+        train_df = train_df.tail(train_window)
+    X_frame = train_df[feature_columns].astype(float)
+    y = train_df[target].astype(float).to_numpy()
+    scale = bool(model_cfg.get("scale_features", True))
+    validation_rows = int(model_cfg.get("validation_window_rows", 252))
+    alpha_grid = [float(v) for v in model_cfg.get("alpha_grid", [model_cfg.get("alpha", 0.001)])]
+    l1_candidates = (
+        [float(v) for v in model_cfg.get("l1_ratio_grid", [model_cfg.get("l1_ratio", 0.05)])]
+        if bool(model_cfg.get("tune_l1_ratio", False))
+        else [float(model_cfg.get("l1_ratio", 0.05))]
+    )
+    selected_alpha = float(model_cfg.get("alpha", 0.001))
+    selected_l1_ratio = float(model_cfg.get("l1_ratio", 0.05))
+    max_iter = int(model_cfg.get("max_iter", 50000))
+    tol = float(model_cfg.get("tol", 0.0001))
+
+    if bool(model_cfg.get("tune_alpha", True)) and len(train_df) > validation_rows + 10:
+        fit_X = X_frame.iloc[:-validation_rows]
+        fit_y = y[:-validation_rows]
+        val_X = X_frame.iloc[-validation_rows:]
+        val_y = y[-validation_rows:]
+        best_score = float("inf")
+        for candidate_l1_ratio in l1_candidates:
+            for candidate_alpha in alpha_grid:
+                candidate_scaler = StandardScaler() if scale else None
+                candidate_fit_X = candidate_scaler.fit_transform(fit_X) if candidate_scaler else fit_X.to_numpy()
+                candidate_val_X = candidate_scaler.transform(val_X) if candidate_scaler else val_X.to_numpy()
+                candidate_model, converged = _fit_single_elasticnet_model(
+                    candidate_fit_X,
+                    fit_y,
+                    alpha=candidate_alpha,
+                    l1_ratio=candidate_l1_ratio,
+                    max_iter=max_iter,
+                    tol=tol,
+                    selection=str(model_cfg.get("selection", "cyclic")),
+                )
+                if not converged:
+                    continue
+                pred = candidate_model.predict(candidate_val_X)
+                score = float(np.sqrt(mean_squared_error(val_y, pred)))
+                if score < best_score:
+                    best_score = score
+                    selected_alpha = candidate_alpha
+                    selected_l1_ratio = candidate_l1_ratio
+
+    scaler = StandardScaler() if scale else None
+    X_fit = scaler.fit_transform(X_frame) if scaler else X_frame.to_numpy()
+    model, converged = _fit_single_elasticnet_model(
+        X_fit,
+        y,
+        alpha=selected_alpha,
+        l1_ratio=selected_l1_ratio,
+        max_iter=max_iter,
+        tol=tol,
+        selection=str(model_cfg.get("selection", "cyclic")),
+    )
+    return FittedNowcastModel(
+        model_type="elasticnet",
+        model=model,
+        scaler=scaler,
+        feature_columns=feature_columns,
+        target_columns=[target],
+        metadata={
+            "alpha": selected_alpha,
+            "l1_ratio": selected_l1_ratio,
+            "n_train_rows": int(len(train_df)),
+            "train_start_date": str(pd.Timestamp(train_df.index.min()).date()),
+            "train_end_date": str(pd.Timestamp(train_df.index.max()).date()),
+            "scale_features": scale,
+            "converged": converged,
             "feature_extraction": {"enabled": False},
             "n_raw_features": len(feature_columns),
             "n_model_features": len(feature_columns),

@@ -10,6 +10,7 @@ from ff5_predictor.io import normalize_datetime_index
 from ff5_predictor.nowcast_features import build_nowcast_features
 from ff5_predictor.nowcast_models import (
     ewma_predict,
+    fit_elasticnet_mom_override_nowcast,
     fit_elasticnet_nowcast,
     fit_per_factor_elasticnet_nowcast,
     fit_per_target_pls_ridge_nowcast,
@@ -59,6 +60,14 @@ def run_nowcast_engine(
         fitted_models["ridge"] = fit_ridge_nowcast(train_df, feature_columns, target_columns, config)
     if "elasticnet" in models and not train_df.empty:
         fitted_models["elasticnet"] = fit_elasticnet_nowcast(train_df, feature_columns, target_columns, config)
+    if "elasticnet_mom_override" in models and not train_df.empty:
+        fitted_models["elasticnet_mom_override"] = fit_elasticnet_mom_override_nowcast(
+            train_df,
+            feature_columns,
+            target_columns,
+            config,
+            base_model=fitted_models.get("elasticnet"),
+        )
     if "per_factor_elasticnet" in models and not train_df.empty:
         fitted_models["per_factor_elasticnet"] = fit_per_factor_elasticnet_nowcast(train_df, feature_columns, target_columns, config)
     if "per_target_pls_ridge" in models and not train_df.empty:
@@ -130,6 +139,23 @@ def run_nowcast_engine(
                 snapshots.append(snapshot)
             elif model_type == "per_factor_elasticnet":
                 fitted = fitted_models.get("per_factor_elasticnet")
+                if fitted is None:
+                    continue
+                row = _feature_row(
+                    ff5,
+                    market,
+                    target_date,
+                    spec.cutoff_date,
+                    config,
+                    feature_columns,
+                    predictions_by_model[model_type] if recursive else None,
+                )
+                if row is None:
+                    continue
+                pred_values = fitted.predict_frame(row)[0]
+                model_metadata = fitted.metadata
+            elif model_type == "elasticnet_mom_override":
+                fitted = fitted_models.get("elasticnet_mom_override")
                 if fitted is None:
                     continue
                 row = _feature_row(
