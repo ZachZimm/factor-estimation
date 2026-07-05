@@ -28,6 +28,7 @@ def test_active_configs_load() -> None:
         "config/research/backtest_size_value.yaml",
         "config/research/latest_size_value.yaml",
         "config/research/momentum_enhanced_model_implied.yaml",
+        "config/research/momentum_enhanced_fixed_model_implied.yaml",
     ]
 
     for path in active + research:

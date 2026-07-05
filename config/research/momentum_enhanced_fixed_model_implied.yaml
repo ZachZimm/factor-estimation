@@ -76,7 +76,7 @@ momentum_features:
   rolling_windows: [5, 21, 63]
 
 nowcast:
-  run_name: "momentum_enhanced_model_implied_v1"
+  run_name: "momentum_enhanced_fixed_model_implied_v1"
   models:
     - "rolling_mean"
     - "ewma"
@@ -99,21 +99,19 @@ model_implied_series:
 
 models:
   elasticnet:
-    alpha: 0.001
-    alpha_grid: [0.0003, 0.001, 0.003, 0.01]
+    alpha: 0.01
     l1_ratio: 0.05
     max_iter: 50000
     tol: 0.0001
-    tune_alpha: true
+    tune_alpha: false
     validation_window_rows: 252
     scale_features: true
 
   elasticnet_mom_override:
-    alpha: 0.001
-    alpha_grid: [0.0003, 0.001, 0.003, 0.01]
+    alpha: 0.01
     l1_ratio: 0.05
     max_iter: 50000
     tol: 0.0001
-    tune_alpha: true
+    tune_alpha: false
     validation_window_rows: 252
     scale_features: true
