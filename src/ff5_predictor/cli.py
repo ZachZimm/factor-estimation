@@ -20,6 +20,7 @@ from ff5_predictor.nowcast_io import create_nowcast_run_dir, write_json, write_n
 from ff5_predictor.latest_nowcast import run_latest_nowcast
 from ff5_predictor.model_implied_series import run_model_implied_series
 from ff5_predictor.release_gap_backtest import run_release_gap_backtest
+from ff5_predictor.residual_analysis import run_residual_analysis
 
 LOGGER = logging.getLogger(__name__)
 
@@ -58,6 +59,27 @@ def cmd_backtest_nowcast(config: dict) -> None:
 def cmd_model_implied_series(config: dict) -> None:
     result = run_model_implied_series(config)
     LOGGER.info("Wrote model-implied FF5 series outputs to %s", result.run_dir)
+
+
+def cmd_analyze_residuals(
+    config: dict,
+    predictions_csv: str | None = None,
+    run_dir: str | None = None,
+    output_dir: str | None = None,
+    model_type: str | None = None,
+    release_gap_size: int | None = None,
+    gap_day: int | None = None,
+) -> None:
+    result = run_residual_analysis(
+        config,
+        predictions_csv=predictions_csv,
+        run_dir=run_dir,
+        output_dir=output_dir,
+        model_type=model_type,
+        release_gap_size=release_gap_size,
+        gap_day=gap_day,
+    )
+    LOGGER.info("Wrote residual analysis outputs to %s", result.run_dir)
 
 
 def cmd_build_nowcast_dataset(config: dict) -> None:
@@ -138,6 +160,7 @@ def build_parser() -> argparse.ArgumentParser:
             "nowcast",
             "backtest-nowcast",
             "model-implied-series",
+            "analyze-residuals",
             "build-nowcast-dataset",
         ],
     )
@@ -160,6 +183,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--model-type", help="Default model to show when comparing run predictions")
     parser.add_argument("--gap-day", type=int, help="Default release-gap day filter for backtest prediction rows")
+    parser.add_argument("--release-gap-size", type=int, help="Release-gap size filter for residual analysis")
+    parser.add_argument("--analysis-output-dir", help="Output directory for analyze-residuals")
     return parser
 
 
@@ -176,6 +201,16 @@ def main(argv: list[str] | None = None) -> None:
         cmd_backtest_nowcast(config_with_date_filter(config, args.start_date, args.end_date))
     elif args.command == "model-implied-series":
         cmd_model_implied_series(config_with_date_filter(config, args.start_date, args.end_date))
+    elif args.command == "analyze-residuals":
+        cmd_analyze_residuals(
+            config_with_date_filter(config, args.start_date, args.end_date),
+            predictions_csv=args.predictions_csv,
+            run_dir=args.run_dir,
+            output_dir=args.analysis_output_dir,
+            model_type=args.model_type,
+            release_gap_size=args.release_gap_size,
+            gap_day=args.gap_day,
+        )
     elif args.command == "build-nowcast-dataset":
         cmd_build_nowcast_dataset(config_with_date_filter(config, args.start_date, args.end_date))
     elif args.command == "list-models":

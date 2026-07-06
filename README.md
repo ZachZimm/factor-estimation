@@ -74,6 +74,15 @@ data/nowcasts/model_implied_series_v1/<timestamp>/metrics/error_summary.csv
 data/nowcasts/model_implied_series_v1/<timestamp>/metrics/model_ranking.csv
 ```
 
+Residual analysis outputs:
+
+```text
+<run_dir>/analysis/residuals/tables/residual_panel.csv
+<run_dir>/analysis/residuals/tables/residual_market_lead_lag_correlation.csv
+<run_dir>/analysis/residuals/tables/residual_regime_summary.csv
+<run_dir>/analysis/residuals/figures/
+```
+
 Diagnostic train/inference datasets:
 
 ```text
@@ -143,6 +152,19 @@ or:
 ```
 
 This walk-forward series trains only on dates before each checkpoint, predicts each historical target date, and saves both the model estimate and the official value for comparison. The default config predicts every aligned historical date after the minimum training period while refitting every 21 rows. Set `model_implied_series.refit_step_rows: 1` for exact daily refits.
+
+## Residual Analysis
+
+To analyze differences between official values and model-implied estimates after a run has completed:
+
+```bash
+python -m ff5_predictor.cli analyze-residuals \
+  --config config/nowcast/model_implied_series.yaml \
+  --run-dir data/nowcasts/model_implied_series_v1/<timestamp> \
+  --model-type elasticnet
+```
+
+This writes residual summary tables, cross-factor residual correlations, residual autocorrelations, market lead/lag correlations, regime summaries, simple market regressions, and SVG figures. The standard market overlay figure pairs SPY cumulative return with mean and max absolute residuals in basis points. For release-gap backtests, use `--release-gap-size 1` or `--gap-day 1` if you want a single comparable gap horizon.
 
 ## Data Policy
 

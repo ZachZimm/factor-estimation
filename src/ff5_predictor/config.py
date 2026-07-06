@@ -123,6 +123,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "backend": "loky",
         "verbose": 0,
     },
+    "residual_analysis": {
+        "autocorrelation_lags": [1, 2, 5, 10, 21, 63],
+        "market_lags": [-21, -10, -5, -1, 0, 1, 5, 10, 21],
+        "high_vol_quantile": 0.8,
+        "low_vol_quantile": 0.2,
+    },
     "feature_extraction": {
         "enabled": False,
         "method": "none",
