@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
+import ff5_predictor.nowcast_engine as nowcast_engine
 from ff5_predictor.nowcast_engine import NowcastTargetSpec, run_nowcast_engine, select_backtest_columns, select_nowcast_columns
 from ff5_predictor.nowcast_features import build_nowcast_features
 
@@ -226,6 +228,64 @@ def test_engine_elasticnet_smoke() -> None:
     assert "pred_Mkt-RF" in predictions.columns
 
 
+def test_engine_gradient_boosting_smoke() -> None:
+    ff5, market = _frames()
+    config = _config()
+    config["nowcast"] = {"models": ["gradient_boosting"], "train_window_rows": 10, "min_train_rows": 3}
+    config["models"]["gradient_boosting"] = {
+        "learning_rate": 0.1,
+        "max_iter": 5,
+        "max_leaf_nodes": 7,
+        "min_samples_leaf": 2,
+        "early_stopping": False,
+        "n_jobs": 1,
+    }
+    cutoff = pd.Timestamp("2024-01-06")
+    target_dates = pd.DatetimeIndex([pd.Timestamp("2024-01-07")])
+    train_df, feature_columns = _train_frame(ff5, market, cutoff, config)
+    result = run_nowcast_engine(
+        ff5,
+        market,
+        train_df,
+        feature_columns,
+        TARGETS,
+        NowcastTargetSpec(target_dates, cutoff, target_dates.max(), ff5.loc[target_dates, TARGETS], False),
+        config,
+    )
+    predictions = select_backtest_columns(result.predictions, TARGETS)
+    assert set(predictions["model_type"]) == {"gradient_boosting"}
+    assert "pred_Mkt-RF" in predictions.columns
+
+
+def test_engine_uses_precomputed_feature_frame_without_rebuilding(monkeypatch: pytest.MonkeyPatch) -> None:
+    ff5, market = _frames()
+    config = _config()
+    config["nowcast"] = {"models": ["ridge"], "train_window_rows": 10, "min_train_rows": 3}
+    cutoff = pd.Timestamp("2024-01-06")
+    target_dates = pd.DatetimeIndex([pd.Timestamp("2024-01-07")])
+    full_features = build_nowcast_features(ff5.iloc[0:0], market, config).features
+    train_features = full_features.loc[:cutoff].dropna(axis=1, how="all")
+    train_df = train_features.join(ff5[TARGETS].loc[:cutoff]).dropna()
+
+    def fail_rebuild(*args, **kwargs):
+        raise AssertionError("build_nowcast_features should not be called when feature_frame is supplied")
+
+    monkeypatch.setattr(nowcast_engine, "build_nowcast_features", fail_rebuild)
+    result = run_nowcast_engine(
+        ff5,
+        market,
+        train_df,
+        list(train_features.columns),
+        TARGETS,
+        NowcastTargetSpec(target_dates, cutoff, target_dates.max(), ff5.loc[target_dates, TARGETS], False),
+        config,
+        feature_frame=full_features,
+    )
+    predictions = select_backtest_columns(result.predictions, TARGETS)
+    assert set(predictions["model_type"]) == {"ridge"}
+    assert "pred_Mkt-RF" in predictions.columns
+
+
 def test_engine_per_factor_elasticnet_smoke() -> None:
     ff5, market = _frames()
     config = _config()
@@ -321,3 +381,5 @@ def test_engine_tft_with_group_pca_smoke() -> None:
     predictions = select_backtest_columns(result.predictions, TARGETS)
     assert set(predictions["model_type"]) == {"tft"}
     assert set(predictions["feature_extraction_method"]) == {"group_pca"}
+    assert not result.training_history.empty
+    assert {"train_loss", "validation_rmse", "train_directional_accuracy"}.issubset(result.training_history.columns)

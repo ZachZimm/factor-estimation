@@ -16,6 +16,7 @@ from ff5_predictor.io import ensure_dir, normalize_datetime_index
 from ff5_predictor.nowcast_engine import NowcastTargetSpec, run_nowcast_engine, select_backtest_columns
 from ff5_predictor.nowcast_features import build_nowcast_features
 from ff5_predictor.nowcast_io import create_nowcast_run_dir, write_json, write_nowcast_predictions, write_yaml
+from ff5_predictor.training_diagnostics import write_training_diagnostics
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,13 @@ class ModelImpliedSeriesResult:
     predictions: pd.DataFrame
     metrics: dict[str, Any]
     run_dir: Path
+    training_history: pd.DataFrame
+
+
+@dataclass(frozen=True)
+class _BatchPredictionResult:
+    predictions: pd.DataFrame
+    training_history: pd.DataFrame
 
 
 def run_model_implied_series(config: dict[str, Any]) -> ModelImpliedSeriesResult:
@@ -42,19 +50,28 @@ def run_model_implied_series_from_frames(
     aligned_dates = pd.DatetimeIndex(ff5.index.intersection(market.index)).sort_values()
     if aligned_dates.empty:
         predictions = pd.DataFrame()
+        training_history = pd.DataFrame()
     else:
         batches = _make_prediction_batches(aligned_dates, config)
+        static_feature_frame = _build_static_feature_frame(ff5, market, config)
         series_cfg = config.get("model_implied_series", {})
         n_jobs = int(series_cfg.get("n_jobs", config.get("backtest", {}).get("n_jobs", 1)))
         if n_jobs == 1 or len(batches) <= 1:
-            results = [_predict_batch(ff5, market, batch, config) for batch in batches]
+            results = [_predict_batch(ff5, market, batch, config, static_feature_frame) for batch in batches]
         else:
+            chunks = _chunk_batches(batches, n_jobs)
             results = Parallel(
                 n_jobs=n_jobs,
                 backend=str(series_cfg.get("backend", config.get("backtest", {}).get("backend", "loky"))),
                 verbose=int(series_cfg.get("verbose", config.get("backtest", {}).get("verbose", 0))),
-            )(delayed(_predict_batch)(ff5, market, batch, config) for batch in batches)
-        predictions = pd.concat(results, ignore_index=True) if results else pd.DataFrame()
+            )(
+                delayed(_predict_batch_chunk)(ff5, market, chunk, config, static_feature_frame)
+                for chunk in chunks
+                if chunk
+            )
+        predictions = pd.concat([result.predictions for result in results], ignore_index=True) if results else pd.DataFrame()
+        histories = [result.training_history for result in results if not result.training_history.empty]
+        training_history = pd.concat(histories, ignore_index=True) if histories else pd.DataFrame()
 
     predictions = select_backtest_columns(predictions, target_columns)
     predictions = _add_error_columns(predictions, target_columns)
@@ -75,8 +92,12 @@ def run_model_implied_series_from_frames(
     error_summary.to_csv(run_dir / "metrics" / "error_summary.csv", index=False)
     write_json(run_dir / "metrics" / "metrics.json", metrics)
     write_json(run_dir / "metrics" / "shared_date_metrics.json", shared)
-    write_json(run_dir / "metadata" / "model_implied_series_metadata.json", _metadata(config, predictions, aligned_dates))
-    return ModelImpliedSeriesResult(predictions=predictions, metrics=metrics, run_dir=run_dir)
+    training_diagnostics_metadata = write_training_diagnostics(run_dir, training_history)
+    write_json(
+        run_dir / "metadata" / "model_implied_series_metadata.json",
+        {**_metadata(config, predictions, aligned_dates), "training_diagnostics": training_diagnostics_metadata},
+    )
+    return ModelImpliedSeriesResult(predictions=predictions, metrics=metrics, run_dir=run_dir, training_history=training_history)
 
 
 def _make_prediction_batches(aligned_dates: pd.DatetimeIndex, config: dict[str, Any]) -> list[pd.DatetimeIndex]:
@@ -102,15 +123,16 @@ def _predict_batch(
     market: pd.DataFrame,
     target_dates: pd.DatetimeIndex,
     config: dict[str, Any],
-) -> pd.DataFrame:
+    static_feature_frame: pd.DataFrame | None = None,
+) -> _BatchPredictionResult:
     if target_dates.empty:
-        return pd.DataFrame()
+        return _BatchPredictionResult(pd.DataFrame(), pd.DataFrame())
     target_columns = list(config["prediction"]["target_columns"])
     cutoff_date = _previous_aligned_date(pd.DatetimeIndex(ff5.index.intersection(market.index)).sort_values(), target_dates[0])
-    train_df, feature_columns = _training_frame(ff5, market, cutoff_date, config)
+    train_df, feature_columns = _training_frame(ff5, market, cutoff_date, config, static_feature_frame)
     min_rows = int(config.get("nowcast", {}).get("min_train_rows", 1000))
     if len(train_df) < min_rows:
-        return pd.DataFrame()
+        return _BatchPredictionResult(pd.DataFrame(), pd.DataFrame())
     spec = NowcastTargetSpec(
         target_dates=target_dates,
         cutoff_date=pd.Timestamp(cutoff_date),
@@ -127,8 +149,23 @@ def _predict_batch(
         target_columns=target_columns,
         spec=spec,
         config=config,
+        feature_frame=static_feature_frame,
     )
-    return result.predictions
+    return _BatchPredictionResult(result.predictions, result.training_history)
+
+
+def _predict_batch_chunk(
+    ff5: pd.DataFrame,
+    market: pd.DataFrame,
+    batches: list[pd.DatetimeIndex],
+    config: dict[str, Any],
+    static_feature_frame: pd.DataFrame | None = None,
+) -> _BatchPredictionResult:
+    results = [_predict_batch(ff5, market, batch, config, static_feature_frame) for batch in batches]
+    predictions = pd.concat([result.predictions for result in results], ignore_index=True) if results else pd.DataFrame()
+    histories = [result.training_history for result in results if not result.training_history.empty]
+    training_history = pd.concat(histories, ignore_index=True) if histories else pd.DataFrame()
+    return _BatchPredictionResult(predictions, training_history)
 
 
 def _previous_aligned_date(aligned_dates: pd.DatetimeIndex, target_date: pd.Timestamp) -> pd.Timestamp:
@@ -143,13 +180,39 @@ def _training_frame(
     market: pd.DataFrame,
     cutoff_date: pd.Timestamp,
     config: dict[str, Any],
+    static_feature_frame: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, list[str]]:
     target_columns = list(config["prediction"]["target_columns"])
-    feature_result = build_nowcast_features(ff5.loc[:cutoff_date], market.loc[:cutoff_date], config)
-    train_df = feature_result.features.join(ff5[target_columns].loc[:cutoff_date], how="inner")
-    feature_columns = list(feature_result.feature_columns)
+    if static_feature_frame is not None:
+        feature_frame = static_feature_frame.loc[:cutoff_date].dropna(axis=1, how="all")
+        train_df = feature_frame.join(ff5[target_columns].loc[:cutoff_date], how="inner")
+        feature_columns = list(feature_frame.columns)
+    else:
+        feature_result = build_nowcast_features(ff5.loc[:cutoff_date], market.loc[:cutoff_date], config)
+        train_df = feature_result.features.join(ff5[target_columns].loc[:cutoff_date], how="inner")
+        feature_columns = list(feature_result.feature_columns)
     train_df = train_df.dropna(subset=feature_columns + target_columns)
     return train_df, feature_columns
+
+
+def _build_static_feature_frame(ff5: pd.DataFrame, market: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame | None:
+    if not _can_use_static_feature_frame(config):
+        return None
+    feature_result = build_nowcast_features(ff5.iloc[0:0], market, config)
+    return feature_result.features
+
+
+def _can_use_static_feature_frame(config: dict[str, Any]) -> bool:
+    return (
+        not bool(config.get("target_features", {}).get("include_lagged_targets", False))
+        and not bool(config.get("availability", {}).get("recursive_factor_lags", False))
+        and not bool(config.get("fundamentals", {}).get("enabled", False))
+    )
+
+
+def _chunk_batches(batches: list[pd.DatetimeIndex], n_jobs: int) -> list[list[pd.DatetimeIndex]]:
+    n_chunks = max(1, min(int(n_jobs), len(batches)))
+    return [list(batches[i::n_chunks]) for i in range(n_chunks)]
 
 
 def _add_error_columns(predictions: pd.DataFrame, target_columns: list[str]) -> pd.DataFrame:

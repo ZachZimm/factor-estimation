@@ -74,6 +74,13 @@ def test_release_gap_backtest_outputs_gap_metadata_and_metrics(tmp_path) -> None
     assert (pd.to_datetime(result.predictions["target_date"]) > pd.to_datetime(result.predictions["cutoff_date"])).all()
     assert "metrics_by_gap_day" in result.gap_metrics
     assert (result.run_dir / "metrics" / "model_ranking.csv").exists()
+    residual_path = result.run_dir / "predictions" / "model_implied_minus_official_series.csv"
+    assert residual_path.exists()
+    residuals = pd.read_csv(residual_path)
+    first_prediction = result.predictions.iloc[0]
+    first_residual = residuals.iloc[0]
+    expected = float(first_prediction["pred_Mkt-RF"]) - float(first_prediction["actual_Mkt-RF"])
+    assert abs(float(first_residual["model_implied_minus_official_Mkt-RF"]) - expected) < 1e-12
 
 
 def test_release_gap_backtest_parallel_cutoffs(tmp_path) -> None:

@@ -79,23 +79,19 @@ def _winner_minus_loser_proxy(
     bottom_quantile: float,
     min_assets: int,
 ) -> pd.Series:
-    values = []
-    index = signal.index
     top_q = min(max(top_quantile, 0.0), 1.0)
     bottom_q = min(max(bottom_quantile, 0.0), 1.0)
-    for date in index:
-        signal_row = signal.loc[date]
-        return_row = same_day_returns.loc[date]
-        valid = signal_row.notna() & return_row.notna()
-        n_valid = int(valid.sum())
-        if n_valid < min_assets:
-            values.append(np.nan)
-            continue
-        ranked = signal_row[valid].sort_values()
-        n_bottom = max(1, int(np.floor(n_valid * bottom_q)))
-        n_top = max(1, int(np.floor(n_valid * top_q)))
-        bottom_tickers = ranked.index[:n_bottom]
-        top_tickers = ranked.index[-n_top:]
-        value = float(return_row[top_tickers].mean() - return_row[bottom_tickers].mean())
-        values.append(value)
-    return pd.Series(values, index=index)
+    valid = signal.notna() & same_day_returns.notna()
+    valid_counts = valid.sum(axis=1)
+    ranks = signal.where(valid).rank(axis=1, method="first", ascending=True)
+
+    n_bottom = np.floor(valid_counts * bottom_q).astype(int).clip(lower=1)
+    n_top = np.floor(valid_counts * top_q).astype(int).clip(lower=1)
+    bottom_mask = ranks.le(n_bottom, axis=0)
+    top_mask = ranks.gt(valid_counts - n_top, axis=0)
+
+    top_returns = same_day_returns.where(top_mask).mean(axis=1)
+    bottom_returns = same_day_returns.where(bottom_mask).mean(axis=1)
+    result = top_returns - bottom_returns
+    result = result.where(valid_counts >= min_assets)
+    return result.reindex(signal.index)

@@ -29,6 +29,7 @@ from ff5_predictor.nowcast_models import (
     FittedNowcastModel,
     save_fitted_model,
 )
+from ff5_predictor.training_diagnostics import write_training_diagnostics
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,7 @@ class LatestNowcastResult:
     feature_snapshot: pd.DataFrame
     metadata: dict[str, Any]
     run_dir: Path
+    training_history: pd.DataFrame
 
 
 def run_latest_nowcast(config: dict[str, Any]) -> LatestNowcastResult:
@@ -92,6 +94,7 @@ def run_latest_nowcast_from_frames(
     if bool(config.get("nowcast", {}).get("save_feature_snapshot", True)):
         ensure_dir(run_dir / "features")
         feature_snapshot.to_parquet(run_dir / "features" / "latest_feature_snapshot.parquet")
+    training_diagnostics_metadata = write_training_diagnostics(run_dir, engine_result.training_history)
 
     attribution_metadata: dict[str, Any] = {"enabled": False}
     if (
@@ -115,6 +118,7 @@ def run_latest_nowcast_from_frames(
             "uses_same_day_market_data": int(config.get("availability", {}).get("market_data_lag_rows", 0)) == 0,
         },
         "attribution": attribution_metadata,
+        "training_diagnostics": training_diagnostics_metadata,
     }
     write_json(run_dir / "metadata" / "metadata.json", metadata)
     if config.get("nowcast", {}).get("run_name") == "latest":
@@ -124,6 +128,7 @@ def run_latest_nowcast_from_frames(
         feature_snapshot=feature_snapshot,
         metadata=metadata,
         run_dir=run_dir,
+        training_history=engine_result.training_history,
     )
 
 

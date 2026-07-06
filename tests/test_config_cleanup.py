@@ -29,6 +29,12 @@ def test_active_configs_load() -> None:
         "config/research/latest_size_value.yaml",
         "config/research/momentum_enhanced_model_implied.yaml",
         "config/research/momentum_enhanced_fixed_model_implied.yaml",
+        "config/research/architecture_linear.yaml",
+        "config/research/architecture_per_factor_elasticnet.yaml",
+        "config/research/architecture_gradient_boosting.yaml",
+        "config/research/architecture_tcn.yaml",
+        "config/research/architecture_ft_transformer.yaml",
+        "config/research/architecture_tft.yaml",
     ]
 
     for path in active + research:
@@ -59,3 +65,4 @@ def test_readme_command_paths_and_start_script_exist() -> None:
     assert Path("scripts/research/start_elasticnet_refined_experiment.sh").exists()
     assert Path("scripts/research/start_per_factor_elasticnet_experiment.sh").exists()
     assert Path("scripts/research/start_momentum_enhanced_experiment.sh").exists()
+    assert Path("start_architecture_comparison.sh").exists()

@@ -240,6 +240,16 @@ models:
     validation_window_rows: 252
     scale_features: true
 
+  gradient_boosting:
+    learning_rate: 0.04
+    max_iter: 200
+    max_leaf_nodes: 31
+    min_samples_leaf: 20
+    l2_regularization: 0.0
+    early_stopping: false
+    validation_fraction: 0.1
+    n_jobs: 1
+
   ewma:
     spans: [5, 21, 63]
     default_span: 21
@@ -249,6 +259,18 @@ models:
     hidden_size: 64
     n_heads: 4
     lstm_layers: 1
+    dropout: 0.25
+
+  tcn:
+    channels: [64, 64, 128]
+    kernel_size: 3
+    dropout: 0.25
+
+  ft_transformer:
+    d_model: 64
+    n_heads: 4
+    num_layers: 2
+    dim_feedforward: 128
     dropout: 0.25
 
 proxy_features:

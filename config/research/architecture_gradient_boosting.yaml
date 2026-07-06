@@ -1,0 +1,74 @@
+task:
+  mode: "nowcast"
+  estimate_unreleased_only: false
+
+data:
+  tickers:
+    - "SPY"
+    - "VTI"
+    - "IWM"
+    - "QQQ"
+    - "IVE"
+    - "IVW"
+    - "VBR"
+    - "VBK"
+    - "IJS"
+    - "IJT"
+    - "XLF"
+    - "XLK"
+    - "XLI"
+    - "XLY"
+    - "XLP"
+    - "XLV"
+    - "XLE"
+    - "XLU"
+    - "TLT"
+    - "IEF"
+    - "SHY"
+    - "HYG"
+    - "LQD"
+    - "GLD"
+    - "UUP"
+    - "^VIX"
+    - "IWN"
+    - "IWO"
+    - "IWD"
+    - "IWF"
+    - "IJR"
+    - "IJH"
+    - "RSP"
+    - "SPHQ"
+    - "VNQ"
+    - "EFA"
+    - "EEM"
+    - "PDP"
+
+features:
+  lookback_windows: [1, 2, 5, 10, 21, 63, 126, 252]
+
+momentum_features:
+  enabled: true
+
+nowcast:
+  run_name: "architecture_gradient_boosting_v1"
+  models:
+    - "rolling_mean"
+    - "ewma"
+    - "gradient_boosting"
+  primary_model: "gradient_boosting"
+  min_train_rows: 1000
+  train_window_rows: 2520
+  backtest_step_rows: 63
+
+backtest:
+  n_jobs: 4
+
+models:
+  gradient_boosting:
+    learning_rate: 0.04
+    max_iter: 150
+    max_leaf_nodes: 31
+    min_samples_leaf: 30
+    l2_regularization: 0.001
+    early_stopping: false
+    n_jobs: 1

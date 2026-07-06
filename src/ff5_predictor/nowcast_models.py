@@ -3,14 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from copy import deepcopy
 from typing import Any
+from time import perf_counter
 import warnings
 
 import joblib
 import numpy as np
 import pandas as pd
 from sklearn.exceptions import ConvergenceWarning
+from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.linear_model import ElasticNet, MultiTaskElasticNet, Ridge
 from sklearn.metrics import mean_squared_error
+from sklearn.multioutput import MultiOutputRegressor
 from sklearn.preprocessing import StandardScaler
 
 from ff5_predictor.feature_extraction import (
@@ -119,7 +122,7 @@ class FittedTorchNowcastModel:
         import torch
 
         if len(feature_history) < self.lookback_rows:
-            raise ValueError("Not enough feature history for TFT nowcast prediction")
+            raise ValueError(f"Not enough feature history for {self.model_type} nowcast prediction")
         X = feature_history[self.feature_columns].tail(self.lookback_rows).to_numpy(dtype=np.float32)[None, :, :]
         X_scaled = self.feature_scaler.transform(X)
         self.model.eval()
@@ -564,6 +567,58 @@ def fit_per_target_pls_ridge_nowcast(
     )
 
 
+def fit_gradient_boosting_nowcast(
+    train_df: pd.DataFrame,
+    feature_columns: list[str],
+    target_columns: list[str],
+    config: dict[str, Any],
+) -> FittedNowcastModel:
+    model_cfg = config.get("models", {}).get("gradient_boosting", {})
+    nowcast_cfg = config.get("nowcast", {})
+    train_window = int(nowcast_cfg.get("train_window_rows", 2520))
+    if train_window > 0:
+        train_df = train_df.tail(train_window)
+    extractor = fit_feature_extractor(train_df, feature_columns, target_columns, config, model_type="gradient_boosting")
+    if extractor is not None and not isinstance(extractor, FittedFeatureExtractor):
+        raise ValueError("gradient_boosting requires a single fitted feature extractor")
+    if extractor is not None:
+        X_frame, model_feature_columns = transform_feature_frame(extractor, train_df[feature_columns])
+    else:
+        X_frame = train_df[feature_columns].astype(float)
+        model_feature_columns = feature_columns
+    y = train_df[target_columns].astype(float).to_numpy()
+    estimator = HistGradientBoostingRegressor(
+        loss=str(model_cfg.get("loss", "squared_error")),
+        learning_rate=float(model_cfg.get("learning_rate", 0.04)),
+        max_iter=int(model_cfg.get("max_iter", 200)),
+        max_leaf_nodes=int(model_cfg.get("max_leaf_nodes", 31)),
+        min_samples_leaf=int(model_cfg.get("min_samples_leaf", 20)),
+        l2_regularization=float(model_cfg.get("l2_regularization", 0.0)),
+        early_stopping=bool(model_cfg.get("early_stopping", True)),
+        validation_fraction=float(model_cfg.get("validation_fraction", 0.1)),
+        random_state=int(config.get("experiments", {}).get("random_seed", 42)),
+    )
+    model = MultiOutputRegressor(estimator, n_jobs=int(model_cfg.get("n_jobs", 1)))
+    model.fit(X_frame.to_numpy(), y)
+    return FittedNowcastModel(
+        model_type="gradient_boosting",
+        model=model,
+        scaler=None,
+        feature_columns=model_feature_columns,
+        target_columns=target_columns,
+        metadata={
+            "n_train_rows": int(len(train_df)),
+            "train_start_date": str(pd.Timestamp(train_df.index.min()).date()),
+            "train_end_date": str(pd.Timestamp(train_df.index.max()).date()),
+            "feature_extraction": extractor.metadata if extractor is not None else {"enabled": False},
+            "n_raw_features": len(feature_columns),
+            "n_model_features": len(model_feature_columns),
+            "base_estimator": "HistGradientBoostingRegressor",
+        },
+        extractor=extractor,
+    )
+
+
 def save_fitted_model(fitted: FittedNowcastModel, path) -> None:
     joblib.dump(fitted, path)
 
@@ -573,6 +628,17 @@ def fit_tft_nowcast(
     feature_columns: list[str],
     target_columns: list[str],
     config: dict[str, Any],
+) -> FittedTorchNowcastModel:
+    return fit_torch_sequence_nowcast(train_df, feature_columns, target_columns, config, model_type="tft")
+
+
+def fit_torch_sequence_nowcast(
+    train_df: pd.DataFrame,
+    feature_columns: list[str],
+    target_columns: list[str],
+    config: dict[str, Any],
+    *,
+    model_type: str,
 ) -> FittedTorchNowcastModel:
     import torch
     from torch import nn
@@ -589,15 +655,15 @@ def fit_tft_nowcast(
 
     torch_cfg = config.get("torch", {})
     seq_cfg = config.get("sequence", {})
-    model_cfg = config.get("models", {}).get("tft", {})
+    model_cfg = config.get("models", {}).get(model_type, {})
     lookback = int(seq_cfg.get("lookback_rows", 63))
     train_window = int(config.get("nowcast", {}).get("train_window_rows", 2520))
     train_df = train_df.tail(train_window)
     if len(train_df) < lookback + 2:
-        raise ValueError("Not enough rows to train TFT nowcast model")
-    extractor = fit_feature_extractor(train_df, feature_columns, target_columns, config, model_type="tft")
+        raise ValueError(f"Not enough rows to train {model_type} nowcast model")
+    extractor = fit_feature_extractor(train_df, feature_columns, target_columns, config, model_type=model_type)
     if extractor is not None and not isinstance(extractor, FittedFeatureExtractor):
-        raise ValueError("TFT requires a single fitted feature extractor")
+        raise ValueError(f"{model_type} requires a single fitted feature extractor")
     if extractor is not None:
         X_frame, model_feature_columns = transform_feature_frame(extractor, train_df[feature_columns])
         train_df = pd.concat([X_frame, train_df[target_columns]], axis=1)
@@ -642,7 +708,7 @@ def fit_tft_nowcast(
         val_loader = DataLoader(TensorDataset(torch.from_numpy(X_val), torch.from_numpy(y_val)), batch_size=batch_size)
 
     device = select_device(config)
-    model = make_torch_model("tft", lookback, len(model_feature_columns), len(target_columns), config).to(device)
+    model = make_torch_model(model_type, lookback, len(model_feature_columns), len(target_columns), config).to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=float(torch_cfg.get("learning_rate", 0.0005)),
@@ -656,9 +722,13 @@ def fit_tft_nowcast(
     best_rmse = None
     best_epoch = None
     epoch_count = 0
+    training_history: list[dict[str, Any]] = []
     for epoch in range(max_epochs):
+        epoch_start = perf_counter()
         epoch_count = epoch + 1
         model.train()
+        batch_loss_sum = 0.0
+        batch_sample_count = 0
         for X_batch, y_batch in train_loader:
             X_batch = X_batch.to(device)
             y_batch = y_batch.to(device)
@@ -668,19 +738,45 @@ def fit_tft_nowcast(
             if gradient_clip_norm > 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clip_norm)
             optimizer.step()
+            batch_size_actual = int(len(X_batch))
+            batch_loss_sum += float(loss.detach().cpu().item()) * batch_size_actual
+            batch_sample_count += batch_size_actual
+
+        train_metrics = _torch_loader_metrics(model, train_loader, device, target_scaler)
+        train_metrics["loss"] = batch_loss_sum / max(1, batch_sample_count)
+        val_metrics: dict[str, float] | None = None
+        rmse = None
         if val_loader is not None:
-            rmse = _torch_validation_rmse(model, val_loader, device)
+            val_metrics = _torch_loader_metrics(model, val_loader, device, target_scaler)
+            rmse = val_metrics["rmse"]
             if best_rmse is None or rmse < best_rmse:
                 best_rmse = rmse
                 best_epoch = epoch_count
                 best_state = deepcopy(model.state_dict())
+        history_row: dict[str, Any] = {
+            "epoch": epoch_count,
+            "train_loss": train_metrics["loss"],
+            "train_rmse": train_metrics["rmse"],
+            "train_mae": train_metrics["mae"],
+            "train_directional_accuracy": train_metrics["directional_accuracy"],
+            "validation_loss": None if val_metrics is None else val_metrics["loss"],
+            "validation_rmse": None if val_metrics is None else val_metrics["rmse"],
+            "validation_mae": None if val_metrics is None else val_metrics["mae"],
+            "validation_directional_accuracy": None if val_metrics is None else val_metrics["directional_accuracy"],
+            "is_best_so_far": bool(best_epoch == epoch_count),
+            "elapsed_seconds": perf_counter() - epoch_start,
+        }
+        training_history.append(history_row)
+        if rmse is not None:
             if early_stopping.step(rmse):
                 break
+    for row in training_history:
+        row["is_best_epoch"] = bool(best_epoch is not None and row["epoch"] == best_epoch)
     if best_state is not None and bool(torch_cfg.get("restore_best_checkpoint", True)):
         model.load_state_dict(best_state)
 
     return FittedTorchNowcastModel(
-        model_type="tft",
+        model_type=model_type,
         model=model,
         feature_scaler=feature_scaler,
         target_scaler=target_scaler,
@@ -697,6 +793,9 @@ def fit_tft_nowcast(
             "best_epoch": best_epoch,
             "best_validation_rmse": best_rmse,
             "device": str(device),
+            "training_history": training_history,
+            "n_fit_sequences": int(len(train_positions)),
+            "n_validation_sequences": int(len(val_positions)),
             "feature_extraction": extractor.metadata if extractor is not None else {"enabled": False},
             "n_raw_features": len(feature_columns),
             "n_model_features": len(model_feature_columns),
@@ -713,16 +812,34 @@ def ewma_predict(history: pd.DataFrame, target_columns: list[str], span: int) ->
     return history[target_columns].ewm(span=span, adjust=False).mean().iloc[-1]
 
 
-def _torch_validation_rmse(model, loader, device) -> float:
+def _torch_loader_metrics(model, loader, device, target_scaler) -> dict[str, float]:
     import torch
 
     model.eval()
-    errors: list[torch.Tensor] = []
+    predictions: list[np.ndarray] = []
+    actuals: list[np.ndarray] = []
+    losses: list[float] = []
+    sample_count = 0
     with torch.no_grad():
         for X_batch, y_batch in loader:
-            err = model(X_batch.to(device)) - y_batch.to(device)
-            errors.append(err.pow(2).detach().cpu())
-    return float(torch.cat(errors).mean().sqrt().item())
+            y_hat = model(X_batch.to(device))
+            y_true = y_batch.to(device)
+            err = y_hat - y_true
+            losses.append(float(err.pow(2).mean().detach().cpu().item()) * int(len(X_batch)))
+            sample_count += int(len(X_batch))
+            predictions.append(y_hat.detach().cpu().numpy())
+            actuals.append(y_true.detach().cpu().numpy())
+    pred_scaled = np.concatenate(predictions, axis=0)
+    actual_scaled = np.concatenate(actuals, axis=0)
+    pred = np.asarray(target_scaler.inverse_transform(pred_scaled), dtype=float)
+    actual = np.asarray(target_scaler.inverse_transform(actual_scaled), dtype=float)
+    error = pred - actual
+    return {
+        "loss": float(sum(losses) / max(1, sample_count)),
+        "rmse": float(np.sqrt(np.mean(error * error))),
+        "mae": float(np.mean(np.abs(error))),
+        "directional_accuracy": float((np.sign(pred) == np.sign(actual)).mean()),
+    }
 
 
 def _fit_elasticnet_model(

@@ -138,3 +138,7 @@ def test_latest_nowcast_tft_smoke(tmp_path) -> None:
 
     assert not result.predictions.empty
     assert set(result.predictions["model_type"]) == {"tft"}
+    assert not result.training_history.empty
+    assert (result.run_dir / "training" / "neural_training_history.csv").exists()
+    assert (result.run_dir / "training" / "tft_training_curves.svg").exists()
+    assert result.metadata["training_diagnostics"]["enabled"] is True

@@ -20,6 +20,7 @@ from ff5_predictor.nowcast_engine import (
 )
 from ff5_predictor.nowcast_features import build_nowcast_features
 from ff5_predictor.nowcast_io import create_nowcast_run_dir, write_json, write_nowcast_predictions, write_yaml
+from ff5_predictor.training_diagnostics import write_training_diagnostics
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,13 @@ class ReleaseGapBacktestResult:
     metrics: dict[str, Any]
     gap_metrics: dict[str, Any]
     run_dir: Path
+    training_history: pd.DataFrame
+
+
+@dataclass(frozen=True)
+class _CutoffBacktestResult:
+    predictions: pd.DataFrame
+    training_history: pd.DataFrame
 
 
 def run_release_gap_backtest(config: dict[str, Any]) -> ReleaseGapBacktestResult:
@@ -45,6 +53,7 @@ def run_release_gap_backtest_from_frames(
     market = normalize_datetime_index(market_df)
     target_columns = list(config["prediction"]["target_columns"])
     aligned_dates = pd.DatetimeIndex(ff5.index.intersection(market.index)).sort_values()
+    static_feature_frame = _build_static_feature_frame(ff5, market, config)
     min_rows = int(config.get("nowcast", {}).get("min_train_rows", config.get("training", {}).get("min_train_rows", 1000)))
     step_rows = int(config.get("nowcast", {}).get("backtest_step_rows", 21))
     gap_sizes = [int(v) for v in config.get("availability", {}).get("release_gap_backtest_days", [1, 2, 3, 5, 10])]
@@ -69,7 +78,16 @@ def run_release_gap_backtest_from_frames(
     n_jobs = int(backtest_cfg.get("n_jobs", 1))
     if n_jobs == 1 or len(tasks) <= 1:
         results = [
-            _predict_gap_for_cutoff(ff5, market, cutoff_date, target_dates, selected_dates, cutoff_splits, config)
+            _predict_gap_for_cutoff(
+                ff5,
+                market,
+                cutoff_date,
+                target_dates,
+                selected_dates,
+                cutoff_splits,
+                config,
+                static_feature_frame,
+            )
             for cutoff_date, target_dates, selected_dates, cutoff_splits in tasks
         ]
     else:
@@ -78,18 +96,33 @@ def run_release_gap_backtest_from_frames(
             backend=str(backtest_cfg.get("backend", "loky")),
             verbose=int(backtest_cfg.get("verbose", 0)),
         )(
-            delayed(_predict_gap_for_cutoff)(ff5, market, cutoff_date, target_dates, selected_dates, cutoff_splits, config)
+            delayed(_predict_gap_for_cutoff)(
+                ff5,
+                market,
+                cutoff_date,
+                target_dates,
+                selected_dates,
+                cutoff_splits,
+                config,
+                static_feature_frame,
+            )
             for cutoff_date, target_dates, selected_dates, cutoff_splits in tasks
         )
 
     records: list[dict[str, Any]] = []
+    training_histories: list[pd.DataFrame] = []
     for result in results:
-        records.extend(result.to_dict(orient="records"))
+        records.extend(result.predictions.to_dict(orient="records"))
+        if not result.training_history.empty:
+            training_histories.append(result.training_history)
 
     predictions = select_backtest_columns(pd.DataFrame(records), target_columns)
+    training_history = pd.concat(training_histories, ignore_index=True) if training_histories else pd.DataFrame()
     run_dir = create_nowcast_run_dir(config)
     write_yaml(run_dir / "config_resolved.yaml", config)
     write_nowcast_predictions(run_dir, "release_gap_predictions.csv", predictions)
+    residual_series = _model_implied_minus_official_series(predictions, target_columns)
+    write_nowcast_predictions(run_dir, "model_implied_minus_official_series.csv", residual_series)
     metrics = evaluate_prediction_groups(predictions, target_columns) if not predictions.empty else {}
     shared = evaluate_on_shared_dates(predictions, target_columns, baseline_model="ewma") if not predictions.empty else {}
     ranking = rank_models(shared)
@@ -99,9 +132,16 @@ def run_release_gap_backtest_from_frames(
     write_json(run_dir / "metrics" / "metrics.json", metrics)
     write_json(run_dir / "metrics" / "shared_date_metrics.json", shared)
     write_json(run_dir / "metrics" / "gap_metrics.json", gap_metrics)
-    write_json(run_dir / "metadata" / "backtest_metadata.json", _backtest_metadata(config, predictions))
+    training_diagnostics_metadata = write_training_diagnostics(run_dir, training_history)
+    write_json(run_dir / "metadata" / "backtest_metadata.json", _backtest_metadata(config, predictions, training_diagnostics_metadata))
     write_json(run_dir / "metadata" / "feature_extraction_metadata.json", _feature_extraction_metadata(config, predictions))
-    return ReleaseGapBacktestResult(predictions=predictions, metrics=metrics, gap_metrics=gap_metrics, run_dir=run_dir)
+    return ReleaseGapBacktestResult(
+        predictions=predictions,
+        metrics=metrics,
+        gap_metrics=gap_metrics,
+        run_dir=run_dir,
+        training_history=training_history,
+    )
 
 
 def _predict_gap_for_cutoff(
@@ -112,12 +152,13 @@ def _predict_gap_for_cutoff(
     selected_target_dates: pd.DatetimeIndex,
     cutoff_splits: list,
     config: dict[str, Any],
-) -> pd.DataFrame:
+    static_feature_frame: pd.DataFrame | None = None,
+) -> _CutoffBacktestResult:
     target_columns = list(config["prediction"]["target_columns"])
-    train_df, feature_columns = _training_frame(ff5, market, cutoff_date, config)
+    train_df, feature_columns = _training_frame(ff5, market, cutoff_date, config, static_feature_frame)
     min_rows = int(config.get("nowcast", {}).get("min_train_rows", config.get("training", {}).get("min_train_rows", 1000)))
     if len(train_df) < min_rows:
-        return empty_backtest_predictions(target_columns)
+        return _CutoffBacktestResult(empty_backtest_predictions(target_columns), pd.DataFrame())
     release_gap_size_by_date: dict[pd.Timestamp, list[int]] = {}
     for split in cutoff_splits:
         for date in split.target_dates:
@@ -138,9 +179,13 @@ def _predict_gap_for_cutoff(
         target_columns=target_columns,
         spec=spec,
         config=config,
+        feature_frame=static_feature_frame,
     )
     predictions = select_backtest_columns(result.predictions, target_columns)
-    return _filter_prediction_frame(predictions, selected_target_dates)
+    return _CutoffBacktestResult(
+        predictions=_filter_prediction_frame(predictions, selected_target_dates),
+        training_history=result.training_history,
+    )
 
 
 def _training_frame(
@@ -148,16 +193,41 @@ def _training_frame(
     market: pd.DataFrame,
     cutoff_date: pd.Timestamp,
     config: dict[str, Any],
+    static_feature_frame: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, list[str]]:
     target_columns = list(config["prediction"]["target_columns"])
-    feature_result = build_nowcast_features(ff5.loc[:cutoff_date], market.loc[:cutoff_date], config)
-    train_df = feature_result.features.join(ff5[target_columns].loc[:cutoff_date], how="inner")
-    feature_columns = list(feature_result.feature_columns)
+    if static_feature_frame is not None:
+        feature_frame = static_feature_frame.loc[:cutoff_date].dropna(axis=1, how="all")
+        train_df = feature_frame.join(ff5[target_columns].loc[:cutoff_date], how="inner")
+        feature_columns = list(feature_frame.columns)
+    else:
+        feature_result = build_nowcast_features(ff5.loc[:cutoff_date], market.loc[:cutoff_date], config)
+        train_df = feature_result.features.join(ff5[target_columns].loc[:cutoff_date], how="inner")
+        feature_columns = list(feature_result.feature_columns)
     train_df = train_df.dropna(subset=feature_columns + target_columns)
     return train_df, feature_columns
 
 
-def _backtest_metadata(config: dict[str, Any], predictions: pd.DataFrame) -> dict[str, Any]:
+def _build_static_feature_frame(ff5: pd.DataFrame, market: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame | None:
+    if not _can_use_static_feature_frame(config):
+        return None
+    feature_result = build_nowcast_features(ff5.iloc[0:0], market, config)
+    return feature_result.features
+
+
+def _can_use_static_feature_frame(config: dict[str, Any]) -> bool:
+    return (
+        not bool(config.get("target_features", {}).get("include_lagged_targets", False))
+        and not bool(config.get("availability", {}).get("recursive_factor_lags", False))
+        and not bool(config.get("fundamentals", {}).get("enabled", False))
+    )
+
+
+def _backtest_metadata(
+    config: dict[str, Any],
+    predictions: pd.DataFrame,
+    training_diagnostics_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     return {
         "nowcast_profile": "market_only_all_candidates",
         "n_tickers": int(len(config.get("data", {}).get("tickers", []))),
@@ -168,6 +238,7 @@ def _backtest_metadata(config: dict[str, Any], predictions: pd.DataFrame) -> dic
         "date_filter": dict(config.get("date_filter", {})),
         "n_prediction_rows": int(len(predictions)),
         "backtest_n_jobs": int(config.get("backtest", {}).get("n_jobs", 1)),
+        "training_diagnostics": training_diagnostics_metadata or {"enabled": False},
     }
 
 
@@ -206,3 +277,28 @@ def _filter_prediction_frame(predictions: pd.DataFrame, selected_target_dates: p
     selected = set(pd.DatetimeIndex(selected_target_dates).date)
     dates = pd.to_datetime(predictions["target_date"]).dt.date
     return predictions.loc[dates.isin(selected)].reset_index(drop=True)
+
+
+def _model_implied_minus_official_series(predictions: pd.DataFrame, target_columns: list[str]) -> pd.DataFrame:
+    base_columns = [
+        "date",
+        "cutoff_date",
+        "target_date",
+        "gap_day",
+        "release_gap_size",
+        "model_type",
+    ]
+    residual_columns = [f"model_implied_minus_official_{target}" for target in target_columns]
+    columns = base_columns + residual_columns
+    if predictions.empty:
+        return pd.DataFrame(columns=columns)
+
+    result = predictions.copy()
+    for target in target_columns:
+        result[f"model_implied_minus_official_{target}"] = (
+            result[f"pred_{target}"].astype(float) - result[f"actual_{target}"].astype(float)
+        )
+    for column in base_columns:
+        if column not in result.columns:
+            result[column] = pd.NA
+    return result[columns].reset_index(drop=True)

@@ -12,10 +12,12 @@ from ff5_predictor.nowcast_models import (
     ewma_predict,
     fit_elasticnet_mom_override_nowcast,
     fit_elasticnet_nowcast,
+    fit_gradient_boosting_nowcast,
     fit_per_factor_elasticnet_nowcast,
     fit_per_target_pls_ridge_nowcast,
     fit_ridge_nowcast,
     fit_tft_nowcast,
+    fit_torch_sequence_nowcast,
     rolling_mean_predict,
 )
 
@@ -35,6 +37,7 @@ class NowcastEngineResult:
     predictions: pd.DataFrame
     feature_snapshots: pd.DataFrame
     fitted_models: dict[str, Any]
+    training_history: pd.DataFrame
     metadata: dict[str, Any]
 
 
@@ -46,9 +49,11 @@ def run_nowcast_engine(
     target_columns: list[str],
     spec: NowcastTargetSpec,
     config: dict[str, Any],
+    feature_frame: pd.DataFrame | None = None,
 ) -> NowcastEngineResult:
     ff5 = normalize_datetime_index(ff5_df)
     market = normalize_datetime_index(market_df)
+    static_features = normalize_datetime_index(feature_frame) if feature_frame is not None else None
     target_dates = pd.DatetimeIndex(pd.to_datetime(spec.target_dates).tz_localize(None)).sort_values()
     models = list(config.get("nowcast", {}).get("models", ["ridge"]))
     recursive = bool(config.get("availability", {}).get("recursive_factor_lags", True))
@@ -60,6 +65,8 @@ def run_nowcast_engine(
         fitted_models["ridge"] = fit_ridge_nowcast(train_df, feature_columns, target_columns, config)
     if "elasticnet" in models and not train_df.empty:
         fitted_models["elasticnet"] = fit_elasticnet_nowcast(train_df, feature_columns, target_columns, config)
+    if "gradient_boosting" in models and not train_df.empty:
+        fitted_models["gradient_boosting"] = fit_gradient_boosting_nowcast(train_df, feature_columns, target_columns, config)
     if "elasticnet_mom_override" in models and not train_df.empty:
         fitted_models["elasticnet_mom_override"] = fit_elasticnet_mom_override_nowcast(
             train_df,
@@ -74,6 +81,15 @@ def run_nowcast_engine(
         fitted_models["per_target_pls_ridge"] = fit_per_target_pls_ridge_nowcast(train_df, feature_columns, target_columns, config)
     if "tft" in models and not train_df.empty:
         fitted_models["tft"] = fit_tft_nowcast(train_df, feature_columns, target_columns, config)
+    for torch_model_type in ("tcn", "ft_transformer"):
+        if torch_model_type in models and not train_df.empty:
+            fitted_models[torch_model_type] = fit_torch_sequence_nowcast(
+                train_df,
+                feature_columns,
+                target_columns,
+                config,
+                model_type=torch_model_type,
+            )
 
     predictions_by_model: dict[str, pd.DataFrame] = {model: pd.DataFrame() for model in models}
     history_by_model = {model: ff5[target_columns].loc[: spec.cutoff_date].copy() for model in models}
@@ -90,6 +106,23 @@ def run_nowcast_engine(
     for target_date in target_dates:
         target_date = pd.Timestamp(target_date)
         gap_day = _gap_day_from_market_dates(market.index, spec.cutoff_date, target_date)
+        row_cache: dict[str, pd.DataFrame | None] = {}
+
+        def row_for(model_type: str) -> pd.DataFrame | None:
+            cache_key = "__static__" if static_features is not None else ("__shared__" if not recursive else model_type)
+            if cache_key not in row_cache:
+                row_cache[cache_key] = _feature_row(
+                    ff5,
+                    market,
+                    target_date,
+                    spec.cutoff_date,
+                    config,
+                    feature_columns,
+                    predictions_by_model[model_type] if recursive else None,
+                    feature_frame=static_features,
+                )
+            return row_cache[cache_key]
+
         for model_type in models:
             pred_values: np.ndarray | None = None
             model_metadata: dict[str, Any]
@@ -99,15 +132,7 @@ def run_nowcast_engine(
                 fitted = fitted_models.get("ridge")
                 if fitted is None:
                     continue
-                row = _feature_row(
-                    ff5,
-                    market,
-                    target_date,
-                    spec.cutoff_date,
-                    config,
-                    feature_columns,
-                    predictions_by_model[model_type] if recursive else None,
-                )
+                row = row_for(model_type)
                 if row is None:
                     continue
                 pred_values = fitted.predict_frame(row)[0]
@@ -120,15 +145,7 @@ def run_nowcast_engine(
                 fitted = fitted_models.get("elasticnet")
                 if fitted is None:
                     continue
-                row = _feature_row(
-                    ff5,
-                    market,
-                    target_date,
-                    spec.cutoff_date,
-                    config,
-                    feature_columns,
-                    predictions_by_model[model_type] if recursive else None,
-                )
+                row = row_for(model_type)
                 if row is None:
                     continue
                 pred_values = fitted.predict_frame(row)[0]
@@ -141,15 +158,16 @@ def run_nowcast_engine(
                 fitted = fitted_models.get("per_factor_elasticnet")
                 if fitted is None:
                     continue
-                row = _feature_row(
-                    ff5,
-                    market,
-                    target_date,
-                    spec.cutoff_date,
-                    config,
-                    feature_columns,
-                    predictions_by_model[model_type] if recursive else None,
-                )
+                row = row_for(model_type)
+                if row is None:
+                    continue
+                pred_values = fitted.predict_frame(row)[0]
+                model_metadata = fitted.metadata
+            elif model_type == "gradient_boosting":
+                fitted = fitted_models.get("gradient_boosting")
+                if fitted is None:
+                    continue
+                row = row_for(model_type)
                 if row is None:
                     continue
                 pred_values = fitted.predict_frame(row)[0]
@@ -158,15 +176,7 @@ def run_nowcast_engine(
                 fitted = fitted_models.get("elasticnet_mom_override")
                 if fitted is None:
                     continue
-                row = _feature_row(
-                    ff5,
-                    market,
-                    target_date,
-                    spec.cutoff_date,
-                    config,
-                    feature_columns,
-                    predictions_by_model[model_type] if recursive else None,
-                )
+                row = row_for(model_type)
                 if row is None:
                     continue
                 pred_values = fitted.predict_frame(row)[0]
@@ -175,15 +185,7 @@ def run_nowcast_engine(
                 fitted = fitted_models.get("per_target_pls_ridge")
                 if fitted is None:
                     continue
-                row = _feature_row(
-                    ff5,
-                    market,
-                    target_date,
-                    spec.cutoff_date,
-                    config,
-                    feature_columns,
-                    predictions_by_model[model_type] if recursive else None,
-                )
+                row = row_for(model_type)
                 if row is None:
                     continue
                 pred_values = fitted.predict_frame(row)[0]
@@ -204,15 +206,18 @@ def run_nowcast_engine(
                 fitted = fitted_models.get("tft")
                 if fitted is None:
                     continue
-                row = _feature_row(
-                    ff5,
-                    market,
-                    target_date,
-                    spec.cutoff_date,
-                    config,
-                    feature_columns,
-                    predictions_by_model[model_type] if recursive else None,
-                )
+                row = row_for(model_type)
+                if row is None:
+                    continue
+                transformed_row = fitted.model_feature_frame(row)
+                feature_history = pd.concat([feature_history_by_model[model_type], transformed_row])
+                pred_values = fitted.predict_from_history(feature_history)
+                model_metadata = fitted.metadata
+            elif model_type in {"tcn", "ft_transformer"}:
+                fitted = fitted_models.get(model_type)
+                if fitted is None:
+                    continue
+                row = row_for(model_type)
                 if row is None:
                     continue
                 transformed_row = fitted.model_feature_frame(row)
@@ -251,21 +256,24 @@ def run_nowcast_engine(
             if recursive:
                 predictions_by_model[model_type] = pd.concat([predictions_by_model[model_type], pred_frame])
                 history_by_model[model_type] = pd.concat([history_by_model[model_type], pred_frame])
-            if model_type == "tft" and row is not None:
+            if model_type in {"tft", "tcn", "ft_transformer"} and row is not None:
                 feature_history_by_model[model_type] = pd.concat([feature_history_by_model[model_type], transformed_row])
 
     predictions = pd.DataFrame(records)
     feature_snapshots = pd.concat(snapshots) if snapshots else pd.DataFrame()
     if not feature_snapshots.empty:
         feature_snapshots.index = pd.to_datetime(feature_snapshots["date"])
+    training_history = _collect_training_history(fitted_models, spec)
     return NowcastEngineResult(
         predictions=predictions,
         feature_snapshots=feature_snapshots,
         fitted_models=fitted_models,
+        training_history=training_history,
         metadata={
             "models": models,
             "n_prediction_rows": int(len(predictions)),
             "n_feature_snapshot_rows": int(len(feature_snapshots)),
+            "n_training_history_rows": int(len(training_history)),
             "recursive_factor_lags": recursive,
             "cutoff_date": pd.Timestamp(spec.cutoff_date).date().isoformat(),
             "latest_market_date": pd.Timestamp(spec.latest_market_date).date().isoformat(),
@@ -355,15 +363,19 @@ def _feature_row(
     config: dict[str, Any],
     feature_columns: list[str],
     recursive_predictions: pd.DataFrame | None,
+    feature_frame: pd.DataFrame | None = None,
 ) -> pd.DataFrame | None:
-    feature_result = build_nowcast_features(
-        ff5.loc[:cutoff_date],
-        market.loc[:target_date],
-        config,
-        official_cutoff_date=cutoff_date,
-        recursive_predictions=recursive_predictions,
-    )
-    row = feature_result.features.reindex([target_date])
+    if feature_frame is not None:
+        row = feature_frame.reindex([target_date])
+    else:
+        feature_result = build_nowcast_features(
+            ff5.loc[:cutoff_date],
+            market.loc[:target_date],
+            config,
+            official_cutoff_date=cutoff_date,
+            recursive_predictions=recursive_predictions,
+        )
+        row = feature_result.features.reindex([target_date])
     for column in feature_columns:
         if column not in row.columns:
             row[column] = np.nan
@@ -459,3 +471,34 @@ def _engine_feature_extraction_metadata(fitted_models: dict[str, Any], raw_featu
         "raw_feature_count": len(raw_feature_columns),
         "transformed_feature_count_by_model": transformed_counts,
     }
+
+
+def _collect_training_history(fitted_models: dict[str, Any], spec: NowcastTargetSpec) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for model_type, fitted in fitted_models.items():
+        metadata = getattr(fitted, "metadata", {})
+        history = metadata.get("training_history", [])
+        if not history:
+            continue
+        for row in history:
+            rows.append(
+                {
+                    "model_type": model_type,
+                    "cutoff_date": pd.Timestamp(spec.cutoff_date).date().isoformat(),
+                    "latest_market_date": pd.Timestamp(spec.latest_market_date).date().isoformat(),
+                    "train_start_date": metadata.get("train_start_date"),
+                    "train_end_date": metadata.get("train_end_date"),
+                    "n_train_rows": metadata.get("n_train_rows"),
+                    "n_fit_sequences": metadata.get("n_fit_sequences"),
+                    "n_validation_sequences": metadata.get("n_validation_sequences"),
+                    "lookback_rows": metadata.get("lookback_rows"),
+                    "device": metadata.get("device"),
+                    "best_epoch": metadata.get("best_epoch"),
+                    "best_validation_rmse": metadata.get("best_validation_rmse"),
+                    "feature_extraction_method": _feature_extraction_method(metadata),
+                    "n_raw_features": metadata.get("n_raw_features"),
+                    "n_model_features": metadata.get("n_model_features"),
+                    **dict(row),
+                }
+            )
+    return pd.DataFrame(rows)
