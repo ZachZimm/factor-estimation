@@ -554,7 +554,7 @@ def _line_svg(title: str, data: pd.DataFrame) -> str:
 def _spy_performance_residual_svg(title: str, residual_pivot: pd.DataFrame, market_df: pd.DataFrame) -> str:
     market = normalize_datetime_index(market_df)
     required = ["SPY_close"]
-    width, height = 1120, 620
+    width, height = 1120, 560
     if residual_pivot.empty or not all(column in market.columns for column in required):
         return f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}"><text x="20" y="40">{escape(title)}: SPY close data unavailable</text></svg>'
 
@@ -570,24 +570,20 @@ def _spy_performance_residual_svg(title: str, residual_pivot: pd.DataFrame, mark
     if residual.empty:
         return f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}"><text x="20" y="40">{escape(title)}: no overlapping residual data</text></svg>'
 
-    margin = {"left": 78, "right": 30, "top": 64, "bottom": 46}
-    gap = 34
-    candle_h = 285
-    residual_h = 165
-    performance_top = margin["top"]
-    residual_top = performance_top + candle_h + gap
+    margin = {"left": 88, "right": 104, "top": 92, "bottom": 72}
     plot_w = width - margin["left"] - margin["right"]
+    plot_h = height - margin["top"] - margin["bottom"]
 
     dates = pd.DatetimeIndex(spy.index)
     date_positions = {pd.Timestamp(date).normalize(): idx for idx, date in enumerate(dates)}
     x_denominator = max(1, len(dates) - 1)
 
     spy_close = spy["SPY_close"].astype(float)
-    performance = ((spy_close / spy_close.iloc[0]) - 1.0) * 100.0
+    performance = np.log(spy_close / spy_close.iloc[0])
     performance_min = float(np.nanmin(performance.to_numpy(dtype=float)))
     performance_max = float(np.nanmax(performance.to_numpy(dtype=float)))
     if performance_min == performance_max:
-        performance_pad = abs(performance_min) * 0.1 or 1.0
+        performance_pad = abs(performance_min) * 0.1 or 0.01
     else:
         performance_pad = (performance_max - performance_min) * 0.08
     performance_min -= performance_pad
@@ -600,41 +596,42 @@ def _spy_performance_residual_svg(title: str, residual_pivot: pd.DataFrame, mark
         position = date_positions[pd.Timestamp(date).normalize()]
         return margin["left"] + (position / x_denominator) * plot_w
 
-    def performance_y(value: float) -> float:
-        return performance_top + (1.0 - (value - performance_min) / (performance_max - performance_min)) * candle_h
+    def left_y(value: float) -> float:
+        return margin["top"] + (1.0 - (value - performance_min) / (performance_max - performance_min)) * plot_h
 
-    def residual_y(value: float) -> float:
-        return residual_top + (1.0 - value / residual_max) * residual_h
+    def right_y(value: float) -> float:
+        return margin["top"] + (1.0 - value / residual_max) * plot_h
 
     parts = [
         _svg_header(width, height),
         f'<text x="24" y="34" class="title">{escape(title)}</text>',
-        f'<text x="24" y="54" class="legend">Top: SPY cumulative return from first visible date. Bottom: mean and max absolute official-minus-model-implied residuals in basis points.</text>',
+        '<text x="24" y="56" class="legend">Single-pane overlay: SPY cumulative return uses the left log-return axis; absolute residuals are raw observed values on the right bps axis.</text>',
     ]
-    for top, panel_h, label in [(performance_top, candle_h, "SPY cumulative return, %"), (residual_top, residual_h, "Abs residual, bps")]:
-        parts.append(f'<line x1="{margin["left"]}" y1="{top}" x2="{margin["left"]}" y2="{top + panel_h}" class="axis"/>')
-        parts.append(f'<line x1="{margin["left"]}" y1="{top + panel_h}" x2="{margin["left"] + plot_w}" y2="{top + panel_h}" class="axis"/>')
-        parts.append(f'<text x="{margin["left"]}" y="{top - 10}" class="legend">{escape(label)}</text>')
-        for tick in range(5):
-            y = top + (tick / 4) * panel_h
-            parts.append(f'<line x1="{margin["left"]}" y1="{y:.2f}" x2="{margin["left"] + plot_w}" y2="{y:.2f}" class="grid"/>')
+    parts.append(f'<line x1="{margin["left"]}" y1="{margin["top"]}" x2="{margin["left"]}" y2="{margin["top"] + plot_h}" class="axis"/>')
+    parts.append(f'<line x1="{margin["left"] + plot_w}" y1="{margin["top"]}" x2="{margin["left"] + plot_w}" y2="{margin["top"] + plot_h}" class="axis"/>')
+    parts.append(f'<line x1="{margin["left"]}" y1="{margin["top"] + plot_h}" x2="{margin["left"] + plot_w}" y2="{margin["top"] + plot_h}" class="axis"/>')
+    parts.append(f'<text x="{margin["left"]}" y="{margin["top"] - 18}" class="legend">SPY cumulative return, log scale</text>')
+    parts.append(f'<text x="{margin["left"] + plot_w}" y="{margin["top"] - 18}" text-anchor="end" class="legend">Observed abs residual, bps</text>')
+
     for tick in range(5):
-        y = performance_top + (tick / 4) * candle_h
-        value = performance_max - (tick / 4) * (performance_max - performance_min)
-        parts.append(f'<text x="{margin["left"] - 8}" y="{y + 4:.2f}" text-anchor="end" class="legend">{value:.1f}%</text>')
+        y = margin["top"] + (tick / 4) * plot_h
+        log_value = performance_max - (tick / 4) * (performance_max - performance_min)
+        return_label = (np.exp(log_value) - 1.0) * 100.0
+        parts.append(f'<line x1="{margin["left"]}" y1="{y:.2f}" x2="{margin["left"] + plot_w}" y2="{y:.2f}" class="grid"/>')
+        parts.append(f'<text x="{margin["left"] - 10}" y="{y + 4:.2f}" text-anchor="end" class="legend">{return_label:.1f}%</text>')
     for tick in range(5):
-        y = residual_top + (tick / 4) * residual_h
+        y = margin["top"] + (tick / 4) * plot_h
         value = residual_max - (tick / 4) * residual_max
-        parts.append(f'<text x="{margin["left"] - 8}" y="{y + 4:.2f}" text-anchor="end" class="legend">{value:.1f}</text>')
+        parts.append(f'<text x="{margin["left"] + plot_w + 10}" y="{y + 4:.2f}" class="legend">{value:.1f}</text>')
 
     if performance_min < 0 < performance_max:
-        zero_y = performance_y(0.0)
+        zero_y = left_y(0.0)
         parts.append(f'<line x1="{margin["left"]}" y1="{zero_y:.2f}" x2="{margin["left"] + plot_w}" y2="{zero_y:.2f}" stroke="#8b9bab" stroke-width="1.4" stroke-dasharray="4 5"/>')
 
-    performance_points = [(x_for(pd.Timestamp(date)), performance_y(float(value))) for date, value in performance.dropna().items()]
+    performance_points = [(x_for(pd.Timestamp(date)), left_y(float(value))) for date, value in performance.dropna().items()]
     if len(performance_points) >= 2:
         path = " ".join(("M" if i == 0 else "L") + f"{x:.2f},{y:.2f}" for i, (x, y) in enumerate(performance_points))
-        parts.append(f'<path d="{path}" fill="none" stroke="#263b59" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>')
+        parts.append(f'<path d="{path}" fill="none" stroke="#263b59" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>')
 
     residual_colors = {
         "mean_abs_residual_bps": "#174a5a",
@@ -643,23 +640,27 @@ def _spy_performance_residual_svg(title: str, residual_pivot: pd.DataFrame, mark
     for column, color in residual_colors.items():
         points = []
         for date, value in residual[column].dropna().items():
-            points.append((x_for(pd.Timestamp(date)), residual_y(float(value))))
+            points.append((x_for(pd.Timestamp(date)), right_y(float(value))))
         if len(points) >= 2:
             path = " ".join(("M" if i == 0 else "L") + f"{x:.2f},{y:.2f}" for i, (x, y) in enumerate(points))
-            parts.append(f'<path d="{path}" fill="none" stroke="{color}" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>')
+            parts.append(f'<path d="{path}" fill="none" stroke="{color}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" opacity="0.82"/>')
 
     legend_y = height - 18
-    legend_items = [("SPY cumulative return", "#263b59"), ("mean abs residual", "#174a5a"), ("max abs residual", "#b46732")]
+    legend_items = [
+        ("SPY cumulative return, log-scaled", "#263b59"),
+        ("mean abs residual, observed", "#174a5a"),
+        ("max abs residual, observed", "#b46732"),
+    ]
     legend_x = margin["left"]
     for label, color in legend_items:
         parts.append(f'<line x1="{legend_x}" y1="{legend_y - 4}" x2="{legend_x + 24}" y2="{legend_y - 4}" stroke="{color}" class="line"/>')
         parts.append(f'<text x="{legend_x + 30}" y="{legend_y}" class="legend">{escape(label)}</text>')
-        legend_x += 220
+        legend_x += 305
 
     for idx in np.linspace(0, len(dates) - 1, num=min(6, len(dates)), dtype=int):
         date = dates[idx]
         x = x_for(pd.Timestamp(date))
-        parts.append(f'<text x="{x:.2f}" y="{residual_top + residual_h + 22}" text-anchor="middle" class="legend">{date.strftime("%Y-%m")}</text>')
+        parts.append(f'<text x="{x:.2f}" y="{margin["top"] + plot_h + 26}" text-anchor="middle" class="legend">{date.strftime("%Y-%m")}</text>')
 
     parts.append("</svg>")
     return "\n".join(parts)

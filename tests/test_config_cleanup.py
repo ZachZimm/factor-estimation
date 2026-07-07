@@ -35,6 +35,7 @@ def test_active_configs_load() -> None:
         "config/research/architecture_tcn.yaml",
         "config/research/architecture_ft_transformer.yaml",
         "config/research/architecture_tft.yaml",
+        "config/research/elasticnet_time_series_validation.yaml",
     ]
 
     for path in active + research:
@@ -65,4 +66,5 @@ def test_readme_command_paths_and_start_script_exist() -> None:
     assert Path("scripts/research/start_elasticnet_refined_experiment.sh").exists()
     assert Path("scripts/research/start_per_factor_elasticnet_experiment.sh").exists()
     assert Path("scripts/research/start_momentum_enhanced_experiment.sh").exists()
+    assert Path("scripts/research/start_elasticnet_time_series_validation.sh").exists()
     assert Path("start_architecture_comparison.sh").exists()

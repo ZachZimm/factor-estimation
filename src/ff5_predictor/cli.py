@@ -9,6 +9,7 @@ from pathlib import Path
 from ff5_predictor.config import load_config
 from ff5_predictor.data_famafrench import load_ff5
 from ff5_predictor.data_yfinance import load_market_data
+from ff5_predictor.elasticnet_validation import run_elasticnet_validation
 from ff5_predictor.experiment_config import AVAILABLE_MODELS
 from ff5_predictor.factor_viewer import (
     load_predictions_csv,
@@ -19,6 +20,7 @@ from ff5_predictor.nowcast_dataset import build_nowcast_dataset
 from ff5_predictor.nowcast_io import create_nowcast_run_dir, write_json, write_nowcast_dataset, write_yaml
 from ff5_predictor.latest_nowcast import run_latest_nowcast
 from ff5_predictor.model_implied_series import run_model_implied_series
+from ff5_predictor.performance_analysis import run_performance_analysis
 from ff5_predictor.release_gap_backtest import run_release_gap_backtest
 from ff5_predictor.residual_analysis import run_residual_analysis
 
@@ -80,6 +82,26 @@ def cmd_analyze_residuals(
         gap_day=gap_day,
     )
     LOGGER.info("Wrote residual analysis outputs to %s", result.run_dir)
+
+
+def cmd_analyze_performance(
+    manifest_path: str | None = None,
+    output_dir: str | None = None,
+    title: str | None = None,
+    open_browser: bool = False,
+) -> None:
+    result = run_performance_analysis(
+        manifest_path,
+        output_dir=output_dir,
+        title=title,
+        open_browser=open_browser,
+    )
+    LOGGER.info("Wrote performance analysis report to %s", result.html_path)
+
+
+def cmd_validate_elasticnet(config: dict) -> None:
+    result = run_elasticnet_validation(config)
+    LOGGER.info("Wrote ElasticNet validation outputs to %s", result.run_dir)
 
 
 def cmd_build_nowcast_dataset(config: dict) -> None:
@@ -161,6 +183,8 @@ def build_parser() -> argparse.ArgumentParser:
             "backtest-nowcast",
             "model-implied-series",
             "analyze-residuals",
+            "analyze-performance",
+            "validate-elasticnet",
             "build-nowcast-dataset",
         ],
     )
@@ -185,6 +209,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gap-day", type=int, help="Default release-gap day filter for backtest prediction rows")
     parser.add_argument("--release-gap-size", type=int, help="Release-gap size filter for residual analysis")
     parser.add_argument("--analysis-output-dir", help="Output directory for analyze-residuals")
+    parser.add_argument("--manifest", help="Architecture comparison manifest for analyze-performance")
+    parser.add_argument("--output-dir", help="Output directory for analyze-performance")
+    parser.add_argument("--title", help="Report title for analyze-performance")
     return parser
 
 
@@ -211,6 +238,15 @@ def main(argv: list[str] | None = None) -> None:
             release_gap_size=args.release_gap_size,
             gap_day=args.gap_day,
         )
+    elif args.command == "analyze-performance":
+        cmd_analyze_performance(
+            manifest_path=args.manifest,
+            output_dir=args.output_dir,
+            title=args.title,
+            open_browser=args.open_browser,
+        )
+    elif args.command == "validate-elasticnet":
+        cmd_validate_elasticnet(config_with_date_filter(config, args.start_date, args.end_date))
     elif args.command == "build-nowcast-dataset":
         cmd_build_nowcast_dataset(config_with_date_filter(config, args.start_date, args.end_date))
     elif args.command == "list-models":
