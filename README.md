@@ -114,6 +114,18 @@ config/nowcast/backtest_release_gap.yaml
 
 It simulates official-data release gaps by hiding future official FF5 rows after each cutoff, fitting only on rows available at the cutoff, and predicting hidden dates with same-day market data.
 
+The default horizons are 1, 2, 3, 5, 10, 21, 42, and 63 trading sessions. Longer
+horizons cover multi-week publication gaps; shorter horizons retain their recent
+cutoffs even when a longer gap cannot fit. Aggregate and gap-day metrics count
+each model/cutoff/target-date forecast once, rather than counting it again for
+each enclosing horizon. Per-horizon metrics retain their complete scenario.
+Compare results on common cutoffs and target dates: longer horizons change the
+evaluation population, not the fitted model at a shared cutoff.
+
+These are synthetic release-gap tests, not a reconstruction of historical
+publication vintages. Date cutoffs prevent training on later observation dates,
+but do not establish which revised factor values were actually available then.
+
 ## Date Ranges
 
 To estimate a specific currently unreleased date or date range:
@@ -169,6 +181,29 @@ This writes residual summary tables, cross-factor residual correlations, residua
 ## Data Policy
 
 Fama-French data is loaded from `getFamaFrenchFactors` when practical, otherwise from the official Kenneth French remote zip. Existing repository-local FF5 CSV or zip files are ignored.
+
+`config/nowcast/latest.yaml` rechecks the official feed on every run. Other
+configs default to a 24-hour cache lifetime measured from the successful download,
+not from the last observation date. An unchanged publication still counts as a
+successful recheck. Missing or invalid timestamps and legacy caches are refreshed.
+The shared cache retains the full download; request date filters apply only to the
+returned data.
+
+Configure these policies under `data`:
+
+- `official_cache_policy: refresh` always downloads official factors.
+- `official_cache_policy: max_age` uses `official_cache_max_age_hours`, default 24.
+- `official_cache_policy: cache_only` explicitly runs offline against a valid cache.
+- `allow_stale_official_cache: true` permits a cached fallback after a failed
+  refresh. The default is false: refresh failures stop the run and retain the
+  existing cache. Invalid, incomplete, and regressed downloads also fail.
+- `force_refresh: true` forces a refresh and cannot be combined with `cache_only`.
+
+Run metadata records official-data cache status, download time, latest cached
+factor date, content checksum, and any fallback error. Cache-only and stale-fallback
+runs emit warnings and remain marked as such. Download time is observation
+provenance, not a historical publication timestamp; this policy does not repair
+missing point-in-time vintages.
 
 Market data is downloaded from `yfinance` with `auto_adjust=True` and cached as Parquet. If a requested nowcast date is beyond cached market coverage, the loader attempts a fresh yfinance download before deciding no prediction is possible.
 

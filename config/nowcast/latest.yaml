@@ -2,6 +2,9 @@ task:
   mode: "nowcast"
   estimate_unreleased_only: true
 
+data:
+  official_cache_policy: "refresh"
+
 prediction:
   target_columns:
     - "Mkt-RF"

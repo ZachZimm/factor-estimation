@@ -66,13 +66,16 @@ def _market() -> pd.DataFrame:
 
 
 def test_nowcast_dataset_uses_same_day_market_but_prior_factor_values() -> None:
-    dataset = build_nowcast_dataset(_ff5(), _market(), _config())
+    ff5 = _ff5()
+    ff5.attrs["official_data"] = {"cache_status": "stale_fallback", "refresh_error": "offline"}
+    dataset = build_nowcast_dataset(ff5, _market(), _config())
 
     assert np.isclose(dataset.train_df.loc[pd.Timestamp("2024-01-03"), "SPY_ret_1d"], 0.10)
     assert dataset.train_df.loc[pd.Timestamp("2024-01-03"), "Mkt-RF_lag_1"] == 0.01
     assert dataset.train_df.loc[pd.Timestamp("2024-01-03"), "Mkt-RF"] == 0.02
     assert list(dataset.unreleased_dates) == [pd.Timestamp("2024-01-05")]
     assert "SPY_close" not in dataset.feature_columns
+    assert dataset.metadata["official_data"] == ff5.attrs["official_data"]
 
 
 def test_nowcast_dataset_filters_unreleased_dates() -> None:

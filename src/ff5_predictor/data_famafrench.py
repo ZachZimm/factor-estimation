@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import logging
 import zipfile
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import requests
 
@@ -33,26 +35,65 @@ MOM_COLUMN = "Mom"
 
 
 def load_ff5(config: dict[str, Any]) -> pd.DataFrame:
-    cache_dir = ensure_dir(config["data"]["cache_dir"])
+    data_config = config["data"]
+    cache_dir = ensure_dir(data_config["cache_dir"])
     cache_path = cache_dir / "ff5_daily_decimal.parquet"
-    force_refresh = bool(config["data"].get("force_refresh", False))
+    force_refresh = bool(data_config.get("force_refresh", False))
+    policy = str(data_config.get("official_cache_policy", "max_age"))
+    max_age = float(data_config.get("official_cache_max_age_hours", 24))
+    if policy not in {"max_age", "refresh", "cache_only"}:
+        raise ValueError("data.official_cache_policy must be max_age, refresh, or cache_only")
+    if not np.isfinite(max_age) or max_age < 0:
+        raise ValueError("data.official_cache_max_age_hours must be finite and nonnegative")
+    if force_refresh and policy == "cache_only":
+        raise ValueError("force_refresh cannot be combined with official_cache_policy=cache_only")
 
-    if cache_path.exists() and not force_refresh:
-        df, _ = read_parquet_with_metadata(cache_path)
-        cached = normalize_datetime_index(df)
-        missing = _missing_configured_columns(cached, config)
-        if not missing:
-            return _filter_dates(cached, config)
-        LOGGER.info("Cached FF data missing configured columns %s; refreshing official factors", missing)
+    now = utc_now_iso()
+    cached = None
+    cache_metadata: dict[str, Any] = {}
+    if cache_path.exists():
+        try:
+            candidate, cache_metadata = read_parquet_with_metadata(cache_path)
+            candidate = _validate_official_frame(candidate, config)
+            checksum = cache_metadata.get("content_sha256")
+            if checksum and checksum != _frame_checksum(candidate):
+                raise ValueError("Official factor cache checksum mismatch")
+            cached = candidate
+        except (ValueError, OSError, KeyError) as exc:
+            LOGGER.warning("Official factor cache is unusable: %s", exc)
 
-    df = fetch_ff5_daily(config)
-    df = _filter_dates(df, config)
+    if policy == "cache_only":
+        if cached is None:
+            raise RuntimeError("cache_only requires a valid official factor cache")
+        LOGGER.warning("Using official factor cache without checking the remote publication")
+        return _with_provenance(cached, config, cache_metadata, "cache_only", now)
+
+    age = _cache_age_hours(cache_metadata, now)
+    if (
+        cached is not None and not force_refresh and policy == "max_age"
+        and cache_metadata.get("cache_scope") == "full_download"
+        and age is not None and age < max_age
+    ):
+        return _with_provenance(cached, config, cache_metadata, "fresh_cache", now)
+
+    try:
+        df = _validate_official_frame(fetch_ff5_daily(config), config)
+        if cached is not None and df.index.max() < cached.index.max():
+            raise ValueError("Refreshed official factors end before the existing cache")
+    except Exception as exc:
+        if cached is not None and bool(data_config.get("allow_stale_official_cache", False)):
+            LOGGER.warning("Official factor refresh failed; explicitly allowed stale cache used: %s", exc)
+            return _with_provenance(cached, config, cache_metadata, "stale_fallback", now, str(exc))
+        raise RuntimeError("Official factor refresh failed; existing cache was not replaced") from exc
+
     metadata = {
         "source": "getFamaFrenchFactors_or_kenneth_french_remote_zip",
         "dataset": "F-F_Research_Data_5_Factors_2x3_daily_plus_momentum_daily",
         "download_timestamp_utc": utc_now_iso(),
-        "start_date": config["data"].get("start_date"),
-        "end_date": config["data"].get("end_date"),
+        "cache_scope": "full_download",
+        "content_sha256": _frame_checksum(df),
+        "start_date": str(df.index.min().date()),
+        "end_date": str(df.index.max().date()),
         "tickers": [],
         "library_versions": {
             "pandas": package_version("pandas"),
@@ -62,7 +103,52 @@ def load_ff5(config: dict[str, Any]) -> pd.DataFrame:
         "units": "decimal",
     }
     write_parquet_with_metadata(df, cache_path, metadata)
-    return df
+    return _with_provenance(df, config, metadata, "refreshed", now)
+
+
+def _validate_official_frame(df: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame:
+    frame = normalize_datetime_index(df)
+    required = list(dict.fromkeys(FF5_COLUMNS + list(config.get("prediction", {}).get("target_columns", []))))
+    missing = [column for column in required if column not in frame]
+    if frame.empty or frame.index.hasnans or missing:
+        raise ValueError(f"Official factors are empty, have invalid dates, or lack columns: {missing}")
+    if not np.isfinite(frame[required].to_numpy(dtype=float)).all():
+        raise ValueError("Official factors contain nonfinite values")
+    return frame
+
+
+def _frame_checksum(frame: pd.DataFrame) -> str:
+    digest = hashlib.sha256(
+        pd.util.hash_pandas_object(frame, index=True).to_numpy().tobytes()
+    )
+    digest.update(",".join(frame.columns).encode("utf-8"))
+    return digest.hexdigest()
+
+
+def _cache_age_hours(metadata: dict[str, Any], now: str) -> float | None:
+    try:
+        timestamp = pd.to_datetime(metadata["download_timestamp_utc"], utc=True)
+        age = (pd.Timestamp(now) - timestamp).total_seconds() / 3600
+        return float(age) if np.isfinite(age) and age >= 0 else None
+    except (KeyError, ValueError, TypeError):
+        return None
+
+
+def _with_provenance(
+    frame: pd.DataFrame, config: dict[str, Any], metadata: dict[str, Any],
+    status: str, checked_at: str, refresh_error: str | None = None,
+) -> pd.DataFrame:
+    result = _filter_dates(frame, config).copy()
+    result.attrs["official_data"] = {
+        "cache_status": status,
+        "cache_checked_at_utc": checked_at,
+        "download_timestamp_utc": metadata.get("download_timestamp_utc"),
+        "source": metadata.get("source"),
+        "content_sha256": _frame_checksum(frame),
+        "latest_cached_factor_date": str(frame.index.max().date()),
+        "refresh_error": refresh_error,
+    }
+    return result
 
 
 def fetch_ff5_daily(config: dict[str, Any]) -> pd.DataFrame:

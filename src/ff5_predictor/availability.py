@@ -62,8 +62,8 @@ def make_release_gap_splits(
     gap_sizes = sorted({int(size) for size in gap_sizes if int(size) > 0})
     step = max(int(step_rows), 1)
     splits: list[ReleaseGap] = []
-    max_gap = max(gap_sizes) if gap_sizes else 0
-    for cutoff_pos in range(max(int(min_train_rows) - 1, 0), len(clean_dates) - max_gap, step):
+    # Keep every complete short gap even when a longer horizon will not fit.
+    for cutoff_pos in range(max(int(min_train_rows) - 1, 0), len(clean_dates) - 1, step):
         cutoff_date = pd.Timestamp(clean_dates[cutoff_pos])
         for gap_size in gap_sizes:
             start = cutoff_pos + 1

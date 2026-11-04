@@ -59,6 +59,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "raw_dir": "data/raw",
         "processed_dir": "data/processed",
         "force_refresh": False,
+        "official_cache_policy": "max_age",
+        "official_cache_max_age_hours": 24,
+        "allow_stale_official_cache": False,
     },
     "features": {
         "lookback_windows": [1, 2, 5, 10, 21, 63, 126],
@@ -91,7 +94,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "market_data_lag_rows": 0,
         "official_factor_lag_rows": 1,
         "recursive_factor_lags": False,
-        "release_gap_backtest_days": [1, 2, 3, 5, 10],
+        "release_gap_backtest_days": [1, 2, 3, 5, 10, 21, 42, 63],
     },
     "output": {
         "force_overwrite": False,

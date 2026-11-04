@@ -56,7 +56,7 @@ def run_release_gap_backtest_from_frames(
     static_feature_frame = _build_static_feature_frame(ff5, market, config)
     min_rows = int(config.get("nowcast", {}).get("min_train_rows", config.get("training", {}).get("min_train_rows", 1000)))
     step_rows = int(config.get("nowcast", {}).get("backtest_step_rows", 21))
-    gap_sizes = [int(v) for v in config.get("availability", {}).get("release_gap_backtest_days", [1, 2, 3, 5, 10])]
+    gap_sizes = [int(v) for v in config.get("availability", {}).get("release_gap_backtest_days", [1, 2, 3, 5, 10, 21, 42, 63])]
     splits = make_release_gap_splits(aligned_dates, gap_sizes, min_rows, step_rows)
     grouped: dict[pd.Timestamp, list] = {}
     for split in splits:
@@ -123,8 +123,11 @@ def run_release_gap_backtest_from_frames(
     write_nowcast_predictions(run_dir, "release_gap_predictions.csv", predictions)
     residual_series = _model_implied_minus_official_series(predictions, target_columns)
     write_nowcast_predictions(run_dir, "model_implied_minus_official_series.csv", residual_series)
-    metrics = evaluate_prediction_groups(predictions, target_columns) if not predictions.empty else {}
-    shared = evaluate_on_shared_dates(predictions, target_columns, baseline_model="ewma") if not predictions.empty else {}
+    # One forecast appears in multiple nested release-gap scenarios. Count it
+    # once in aggregate/day metrics so adding horizons does not reweight day 1.
+    unique_predictions = _unique_forecasts(predictions)
+    metrics = evaluate_prediction_groups(unique_predictions, target_columns) if not predictions.empty else {}
+    shared = evaluate_on_shared_dates(unique_predictions, target_columns, baseline_model="ewma") if not predictions.empty else {}
     ranking = rank_models(shared)
     ensure_dir(run_dir / "metrics")
     ranking.to_csv(run_dir / "metrics" / "model_ranking.csv", index=False)
@@ -133,7 +136,10 @@ def run_release_gap_backtest_from_frames(
     write_json(run_dir / "metrics" / "shared_date_metrics.json", shared)
     write_json(run_dir / "metrics" / "gap_metrics.json", gap_metrics)
     training_diagnostics_metadata = write_training_diagnostics(run_dir, training_history)
-    write_json(run_dir / "metadata" / "backtest_metadata.json", _backtest_metadata(config, predictions, training_diagnostics_metadata))
+    write_json(run_dir / "metadata" / "backtest_metadata.json", {
+        **_backtest_metadata(config, predictions, training_diagnostics_metadata),
+        "official_data": dict(ff5_df.attrs.get("official_data", {})),
+    })
     write_json(run_dir / "metadata" / "feature_extraction_metadata.json", _feature_extraction_metadata(config, predictions))
     return ReleaseGapBacktestResult(
         predictions=predictions,
@@ -237,6 +243,8 @@ def _backtest_metadata(
         "release_gap_backtest_days": list(config.get("availability", {}).get("release_gap_backtest_days", [])),
         "date_filter": dict(config.get("date_filter", {})),
         "n_prediction_rows": int(len(predictions)),
+        "n_unique_forecasts": int(len(_unique_forecasts(predictions))),
+        "aggregate_weighting": "one_per_model_cutoff_target_date",
         "backtest_n_jobs": int(config.get("backtest", {}).get("n_jobs", 1)),
         "training_diagnostics": training_diagnostics_metadata or {"enabled": False},
     }
@@ -262,13 +270,19 @@ def _gap_metrics(predictions: pd.DataFrame, target_columns: list[str]) -> dict[s
     return {
         "metrics_by_gap_day": {
             str(gap_day): evaluate_prediction_groups(group, target_columns)
-            for gap_day, group in predictions.groupby("gap_day")
+            for gap_day, group in _unique_forecasts(predictions).groupby("gap_day")
         },
         "metrics_by_release_gap_size": {
             str(size): evaluate_prediction_groups(group, target_columns)
             for size, group in predictions.groupby("release_gap_size")
         },
     }
+
+
+def _unique_forecasts(predictions: pd.DataFrame) -> pd.DataFrame:
+    if predictions.empty:
+        return predictions
+    return predictions.drop_duplicates(["model_type", "cutoff_date", "target_date"])
 
 
 def _filter_prediction_frame(predictions: pd.DataFrame, selected_target_dates: pd.DatetimeIndex) -> pd.DataFrame:

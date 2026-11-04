@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import pandas as pd
+import json
 
-from ff5_predictor.release_gap_backtest import run_release_gap_backtest_from_frames
+from ff5_predictor.release_gap_backtest import _gap_metrics, run_release_gap_backtest_from_frames
 
 
 TARGETS = ["Mkt-RF", "SMB", "HML", "RMW", "CMA"]
@@ -67,6 +68,7 @@ def _frames() -> tuple[pd.DataFrame, pd.DataFrame]:
 
 def test_release_gap_backtest_outputs_gap_metadata_and_metrics(tmp_path) -> None:
     ff5, market = _frames()
+    ff5.attrs["official_data"] = {"cache_status": "cache_only", "download_timestamp_utc": "2024-01-20T00:00:00Z"}
     result = run_release_gap_backtest_from_frames(ff5, market, _config(tmp_path))
 
     assert not result.predictions.empty
@@ -81,6 +83,23 @@ def test_release_gap_backtest_outputs_gap_metadata_and_metrics(tmp_path) -> None
     first_residual = residuals.iloc[0]
     expected = float(first_prediction["pred_Mkt-RF"]) - float(first_prediction["actual_Mkt-RF"])
     assert abs(float(first_residual["model_implied_minus_official_Mkt-RF"]) - expected) < 1e-12
+    unique = result.predictions.drop_duplicates(["model_type", "cutoff_date", "target_date"])
+    assert result.metrics["ridge"]["n_predictions"] == len(unique[unique.model_type == "ridge"])
+    metadata = json.loads((result.run_dir / "metadata" / "backtest_metadata.json").read_text())
+    assert metadata["official_data"] == ff5.attrs["official_data"]
+    assert metadata["n_unique_forecasts"] == len(unique)
+
+
+def test_nested_horizons_do_not_duplicate_gap_day_evidence():
+    predictions = pd.DataFrame([
+        {"model_type": "ridge", "cutoff_date": "2024-01-01", "target_date": "2024-01-02",
+         "date": "2024-01-02", "gap_day": 1, "release_gap_size": size,
+         "pred_Mkt-RF": 0.01, "actual_Mkt-RF": 0.02}
+        for size in [1, 10, 21, 42, 63]
+    ])
+    metrics = _gap_metrics(predictions, ["Mkt-RF"])
+    assert metrics["metrics_by_gap_day"]["1"]["ridge"]["n_predictions"] == 1
+    assert set(metrics["metrics_by_release_gap_size"]) == {"1", "10", "21", "42", "63"}
 
 
 def test_release_gap_backtest_parallel_cutoffs(tmp_path) -> None:

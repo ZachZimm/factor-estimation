@@ -44,6 +44,9 @@ data:
   raw_dir: "data/raw"
   processed_dir: "data/processed"
   force_refresh: false
+  official_cache_policy: "max_age"
+  official_cache_max_age_hours: 24
+  allow_stale_official_cache: false
 
 features:
   lookback_windows: [1, 2, 5, 10, 21, 63, 126]
@@ -82,7 +85,7 @@ availability:
   market_data_lag_rows: 0
   official_factor_lag_rows: 1
   recursive_factor_lags: false
-  release_gap_backtest_days: [1, 2, 3, 5, 10]
+  release_gap_backtest_days: [1, 2, 3, 5, 10, 21, 42, 63]
 
 output:
   force_overwrite: false

@@ -20,6 +20,7 @@ def test_nowcast_config_is_market_only_all_candidates() -> None:
     assert cfg["nowcast"]["models"] == ["elasticnet"]
     assert cfg["nowcast"]["primary_model"] == "elasticnet"
     assert cfg["nowcast"]["save_feature_attributions"] is True
+    assert cfg["data"]["official_cache_policy"] == "refresh"
 
 
 def test_backtest_config_uses_default_elasticnet_with_baselines() -> None:
@@ -28,6 +29,9 @@ def test_backtest_config_uses_default_elasticnet_with_baselines() -> None:
     assert cfg["nowcast"]["primary_model"] == "elasticnet"
     assert cfg["nowcast"]["models"] == ["rolling_mean", "ewma", "ridge", "elasticnet"]
     assert cfg["nowcast"]["run_name"] == "market_only_elasticnet_backtest_v1"
+    assert cfg["availability"]["release_gap_backtest_days"] == [1, 2, 3, 5, 10, 21, 42, 63]
+    assert cfg["data"]["official_cache_max_age_hours"] == 24
+    assert cfg["data"]["allow_stale_official_cache"] is False
 
 
 def test_nowcast_dataset_has_no_ff5_input_features() -> None:

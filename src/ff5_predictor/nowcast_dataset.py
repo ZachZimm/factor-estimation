@@ -72,6 +72,7 @@ def build_nowcast_dataset(
         latest_market_date=market_date,
         unreleased_dates=unreleased,
         metadata={
+            "official_data": dict(ff5_df.attrs.get("official_data", {})),
             "latest_official_factor_date": str(official_date.date()),
             "latest_market_date": str(market_date.date()),
             "n_all_unreleased_dates": int(len(all_unreleased)),

@@ -33,3 +33,13 @@ def test_filter_dates_by_config() -> None:
     )
 
     assert list(filtered) == list(pd.date_range("2024-01-02", "2024-01-04"))
+
+
+def test_longer_horizons_do_not_remove_short_gap_cutoffs() -> None:
+    dates = pd.bdate_range("2024-01-01", periods=100)
+    short = make_release_gap_splits(dates, [1, 10], min_train_rows=20, step_rows=7)
+    expanded = make_release_gap_splits(dates, [1, 10, 21, 42, 63], min_train_rows=20, step_rows=7)
+    short_keys = {(split.cutoff_date, split.gap_size) for split in short}
+    expanded_keys = {(split.cutoff_date, split.gap_size) for split in expanded if split.gap_size <= 10}
+    assert short_keys == expanded_keys
+    assert max(split.gap_size for split in expanded) == 63

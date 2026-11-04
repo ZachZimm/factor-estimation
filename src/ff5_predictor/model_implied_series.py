@@ -95,7 +95,11 @@ def run_model_implied_series_from_frames(
     training_diagnostics_metadata = write_training_diagnostics(run_dir, training_history)
     write_json(
         run_dir / "metadata" / "model_implied_series_metadata.json",
-        {**_metadata(config, predictions, aligned_dates), "training_diagnostics": training_diagnostics_metadata},
+        {
+            **_metadata(config, predictions, aligned_dates),
+            "training_diagnostics": training_diagnostics_metadata,
+            "official_data": dict(ff5_df.attrs.get("official_data", {})),
+        },
     )
     return ModelImpliedSeriesResult(predictions=predictions, metrics=metrics, run_dir=run_dir, training_history=training_history)
 
