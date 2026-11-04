@@ -19,7 +19,7 @@ from ff5_predictor.io import (
 LOGGER = logging.getLogger(__name__)
 
 
-def load_market_data(config: dict[str, Any]) -> pd.DataFrame:
+def _load_market_data(config: dict[str, Any]) -> pd.DataFrame:
     tickers = [ticker.upper() for ticker in config["data"]["tickers"]]
     start = config["data"].get("start_date")
     end = config["data"].get("end_date")
@@ -27,6 +27,11 @@ def load_market_data(config: dict[str, Any]) -> pd.DataFrame:
     ticker_key = cache_key_for_tickers(tickers)
     cache_dir = ensure_dir(config["data"]["cache_dir"])
     cache_path = cache_dir / f"yfinance_{ticker_key}_{start}_{end_key}.parquet"
+
+    if cache_path.exists():
+        from ff5_predictor.vintages import store_for
+        existing, _ = read_parquet_with_metadata(cache_path)
+        store_for(config).ingest(normalize_datetime_index(existing), "market", source="yfinance_cache_observed_now")
 
     if cache_path.exists() and not bool(config["data"].get("force_refresh", False)):
         df, _ = read_parquet_with_metadata(cache_path)
@@ -54,6 +59,10 @@ def _fetch_and_cache_market_data(
     cache_path,
 ) -> pd.DataFrame:
     df = fetch_yfinance_data(tickers, start=start, end=end, auto_adjust=True)
+    if cache_path.exists():
+        previous, _ = read_parquet_with_metadata(cache_path)
+        if not previous.empty and (df.empty or df.index.max() < previous.index.max()):
+            raise ValueError("Refreshed market data ends before the existing cache")
     metadata = {
         "source": "yfinance",
         "dataset": "adjusted_ohlcv",
@@ -142,3 +151,8 @@ def flatten_yfinance_columns(df: pd.DataFrame, tickers: list[str]) -> pd.DataFra
     result = result[expected].apply(pd.to_numeric, errors="coerce")
     result = normalize_datetime_index(result)
     return result.dropna(how="all")
+
+
+def load_market_data(config: dict[str, Any]) -> pd.DataFrame:
+    from ff5_predictor.vintages import load_snapshot
+    return load_snapshot(config, "market", _load_market_data)

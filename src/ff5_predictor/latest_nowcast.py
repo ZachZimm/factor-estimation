@@ -104,8 +104,15 @@ def run_latest_nowcast_from_frames(
     ):
         attribution_metadata = save_linear_attributions(primary_model, feature_snapshot, predictions, config, run_dir)
 
+    from ff5_predictor.vintages import freeze_run
+    prediction_manifest_id = freeze_run(
+        config, ff5_df, market_df, predictions, feature_snapshot, dataset.train_df,
+        fitted_models=engine_result.fitted_models,
+    )
+
     metadata = {
         **dataset.metadata,
+        "prediction_manifest_id": prediction_manifest_id,
         "n_prediction_rows": int(len(predictions)),
         "n_official_plus_nowcast_rows": int(len(combined_series)),
         "models": config.get("nowcast", {}).get("models", []),

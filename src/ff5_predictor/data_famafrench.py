@@ -34,7 +34,7 @@ FF5_COLUMNS = ["Mkt-RF", "SMB", "HML", "RMW", "CMA", "RF"]
 MOM_COLUMN = "Mom"
 
 
-def load_ff5(config: dict[str, Any]) -> pd.DataFrame:
+def _load_ff5(config: dict[str, Any]) -> pd.DataFrame:
     data_config = config["data"]
     cache_dir = ensure_dir(data_config["cache_dir"])
     cache_path = cache_dir / "ff5_daily_decimal.parquet"
@@ -59,6 +59,8 @@ def load_ff5(config: dict[str, Any]) -> pd.DataFrame:
             if checksum and checksum != _frame_checksum(candidate):
                 raise ValueError("Official factor cache checksum mismatch")
             cached = candidate
+            from ff5_predictor.vintages import store_for
+            store_for(config).ingest(candidate, "official", source="legacy_or_current_cache_observed_now")
         except (ValueError, OSError, KeyError) as exc:
             LOGGER.warning("Official factor cache is unusable: %s", exc)
 
@@ -138,7 +140,11 @@ def _with_provenance(
     frame: pd.DataFrame, config: dict[str, Any], metadata: dict[str, Any],
     status: str, checked_at: str, refresh_error: str | None = None,
 ) -> pd.DataFrame:
+    from ff5_predictor.vintages import store_for
+    store = store_for(config)
+    snapshot_id = store.ingest(frame, "official", raw=[store.get_bytes(k) for k in frame.attrs.get("raw_hashes", [])], source=metadata.get("source"))
     result = _filter_dates(frame, config).copy()
+    result.attrs["snapshot_id"] = snapshot_id
     result.attrs["official_data"] = {
         "cache_status": status,
         "cache_checked_at_utc": checked_at,
@@ -170,7 +176,10 @@ def fetch_ff5_daily(config: dict[str, Any]) -> pd.DataFrame:
     raw_dir = ensure_dir(config["data"].get("raw_dir", "data/raw"))
     raw_zip_path = raw_dir / "F-F_Research_Data_5_Factors_2x3_daily_CSV.zip"
     raw_zip_path.write_bytes(response.content)
+    from ff5_predictor.vintages import store_for
+    store_for(config).put_bytes(response.content)
     ff5 = parse_kenneth_french_ff5_zip(response.content)
+    ff5.attrs["raw_hashes"] = [store_for(config).put_bytes(response.content)]
     mom = _download_momentum_daily(config)
     return _join_momentum(ff5, mom)
 
@@ -261,13 +270,19 @@ def _download_momentum_daily(config: dict[str, Any]) -> pd.DataFrame:
     raw_dir = ensure_dir(config["data"].get("raw_dir", "data/raw"))
     raw_zip_path = raw_dir / "F-F_Momentum_Factor_daily_CSV.zip"
     raw_zip_path.write_bytes(response.content)
-    return parse_kenneth_french_momentum_zip(response.content)
+    from ff5_predictor.vintages import store_for
+    store_for(config).put_bytes(response.content)
+    frame = parse_kenneth_french_momentum_zip(response.content)
+    frame.attrs["raw_hashes"] = [store_for(config).put_bytes(response.content)]
+    return frame
 
 
 def _join_momentum(ff5: pd.DataFrame, mom: pd.DataFrame) -> pd.DataFrame:
     joined = normalize_datetime_index(ff5).join(normalize_datetime_index(mom), how="inner")
     columns = ["Mkt-RF", "SMB", "HML", "RMW", "CMA", MOM_COLUMN, "RF"]
-    return joined[columns].dropna(subset=columns)
+    result = joined[columns].dropna(subset=columns)
+    result.attrs["raw_hashes"] = ff5.attrs.get("raw_hashes", []) + mom.attrs.get("raw_hashes", [])
+    return result
 
 
 def _try_get_fama_french_factors() -> pd.DataFrame | None:
@@ -340,3 +355,8 @@ def _missing_configured_columns(df: pd.DataFrame, config: dict[str, Any]) -> lis
     if config.get("prediction", {}).get("predict_rf", False) or "RF" in df.columns:
         required.append("RF")
     return [column for column in required if column not in df.columns]
+
+
+def load_ff5(config: dict[str, Any]) -> pd.DataFrame:
+    from ff5_predictor.vintages import load_snapshot
+    return load_snapshot(config, "official", _load_ff5)
