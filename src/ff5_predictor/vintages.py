@@ -96,7 +96,14 @@ class SnapshotStore:
     def ingest(self, frame, dataset, observed_at=None, raw=(), source=None):
         if dataset not in ('official', 'market'):
             raise ValueError('Unsupported dataset')
+        observed = utc(observed_at)
         frame = frame.sort_index().copy()
+        if dataset == 'market':
+            # An intraday capture is not a completed daily bar. Waiting until the
+            # close must not make that frozen, partial bar eligible retroactively.
+            frame = frame.loc[[d.weekday() < 5 and close_at(d) <= observed for d in frame.index]]
+            if frame.empty:
+                raise ValueError('No completed market sessions at observation time')
         if frame.empty or frame.index.has_duplicates or frame.columns.has_duplicates:
             raise ValueError('Snapshots require nonempty unique dates and columns')
         payload = {'columns': list(frame.columns), 'rows': [
@@ -104,7 +111,7 @@ class SnapshotStore:
             for date, row in zip(frame.index, frame.to_numpy())]}
         snapshot_id = self.put(payload)
         history = self.receipts(dataset)
-        now = utc(observed_at).isoformat()
+        now = observed.isoformat()
         if history and now < history[-1]['observed_at']:
             raise ValueError('Cannot backdate ingestion before existing observations')
         if history and history[-1]['snapshot_id'] == snapshot_id:

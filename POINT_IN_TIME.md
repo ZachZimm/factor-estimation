@@ -54,7 +54,9 @@ point_in_time:
 
 Market daily bars are usable only after 16:15 America/New_York on their session
 date, and after observation in observed mode. DST is respected. Weekends are
-excluded. The policy deliberately delays early-close sessions until 16:15; it does
+excluded. Capture removes unfinished sessions: a morning snapshot cannot become a
+completed daily bar merely because the replay clock later passes the close. A new
+post-close observation is required. The policy deliberately delays early-close sessions until 16:15; it does
 not maintain an exchange holiday calendar or support non-US exchange close times.
 Use this store for the configured US-traded daily ETF/equity inputs. Historical
 adjustments in Yahoo prices remain revisions, not reconstructed past adjustments.

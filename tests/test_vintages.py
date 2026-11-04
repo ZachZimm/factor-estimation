@@ -29,14 +29,29 @@ def test_revision_isolation_idempotence_and_modes(tmp_path):
 
 def test_close_and_dst(tmp_path):
     store = SnapshotStore(tmp_path)
-    market = pd.DataFrame({'SPY_close': [100.]}, index=pd.to_datetime(['2026-11-02']))
+    market = pd.DataFrame({'SPY_close': [99., 100.]},
+                          index=pd.to_datetime(['2026-10-30', '2026-11-02']))
     store.ingest(market, 'market', '2026-11-02T12:00Z')
-    assert store.select('market', '2026-11-02T21:14Z').empty
+    assert len(store.select('market', '2026-11-02T21:14Z')) == 1
     assert len(store.select('market', '2026-11-02T21:15Z')) == 1
+    market.loc[pd.Timestamp('2026-11-02'), 'SPY_close'] = 102.
+    store.ingest(market, 'market', '2026-11-02T21:16Z')
+    assert len(store.select('market', '2026-11-02T21:15Z')) == 1
+    final = store.select('market', '2026-11-02T21:16Z')
+    assert len(final) == 2
+    assert final.iloc[-1]['SPY_close'] == 102.
     assert close_at('2026-07-02').hour == 20
     assert close_at('2026-11-02').hour == 21
     with pytest.raises(ValueError, match='timezone'):
         store.select('market', '2026-11-02')
+
+
+def test_intraday_only_capture_cannot_become_daily_history(tmp_path):
+    store = SnapshotStore(tmp_path)
+    market = pd.DataFrame({'SPY_close': [100.]}, index=pd.to_datetime(['2026-11-02']))
+    with pytest.raises(ValueError, match='No completed market sessions'):
+        store.ingest(market, 'market', '2026-11-02T12:00Z')
+    assert store.receipts('market') == []
 
 
 @pytest.mark.parametrize('missing', [True, False])
