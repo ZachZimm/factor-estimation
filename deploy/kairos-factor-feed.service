@@ -1,0 +1,10 @@
+[Unit]
+Description=Capture and atomically publish the Kairos factor feed
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/zach/wd7/projects/factor-estimation
+ExecStart=/home/zach/wd7/projects/factor-estimation/.venv/bin/python -m ff5_predictor.publish_feed --output /home/zach/projects/kairos/backend/data/factors/feed.json --kairos-backend /home/zach/projects/kairos/backend --timeout 900
+TimeoutStartSec=960
+UMask=0027
+NoNewPrivileges=true

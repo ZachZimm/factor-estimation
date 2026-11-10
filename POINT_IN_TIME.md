@@ -102,3 +102,42 @@ loading is not guaranteed. Raw Yahoo
 HTTP responses, publication feeds, exchange calendars and signed external receipt
 storage are deferred. Existing historical backtest commands remain retrospective;
 use the replay command for observed-vintage claims.
+
+## Automated Kairos publication
+
+Run from this repository with its installed environment:
+
+```bash
+.venv/bin/python -m ff5_predictor.publish_feed \
+  --output /home/zach/projects/kairos/backend/data/factors/feed.json \
+  --kairos-backend /home/zach/projects/kairos/backend --timeout 900
+```
+
+The command captures official and market snapshots through `vintage_cli capture`,
+then exports observed data through `vintage_cli export`. It does not train nowcasts.
+An optional `--prediction-id` includes an already-issued immutable prediction;
+`--skip-capture` only exports existing snapshots. The consumer's own bounded
+parser validates the candidate in its virtual environment. Empty or invalid feeds,
+command failures and timeouts retain the prior output. A nonblocking flock returns
+75 for an overlapping writer; other failures return 1 and successful publication
+returns 0. Feed and health files use same-directory temporary files, fsync and
+atomic rename. Consumers must not write the output directly. Feed and health are
+separate atomic files, so a crash between them can leave old health until next run.
+
+`deploy/kairos-factor-feed.service` and `.timer` are user-systemd units configured
+for the current checkout locations. Adjust paths before deploying elsewhere.
+To install for this user, without restarting Kairos:
+
+```bash
+install -d ~/.config/systemd/user
+install -m 644 deploy/kairos-factor-feed.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now kairos-factor-feed.timer
+```
+
+Set `KAIROS_FACTOR_FEED_PATH` in Kairos's backend environment to the output path.
+The supplied timer runs weekdays at 23:30 UTC with up to five minutes jitter;
+`Persistent=true` catches missed runs. The publisher bounds its subprocess work
+to 900 seconds and systemd bounds the whole process to 960 seconds. The timer
+requires a running user manager; unattended boot operation needs the operator's
+existing user-service policy. The units are supplied, not automatically enabled.

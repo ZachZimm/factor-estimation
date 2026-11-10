@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Kairos factor capture and publication
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 23:30:00 UTC
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
